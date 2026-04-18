@@ -22,7 +22,7 @@ export default function Dashboard() {
   useEffect(() => {
     const checkUser = async () => {
       // Mock logic if Supabase not configured
-      if (process.env.NEXT_PUBLIC_SUPABASE_URL === undefined) {
+      if (!process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL.includes('tu-project-ref')) {
         const session = localStorage.getItem('mock_session');
         if (session) {
           const parsed = JSON.parse(session);
@@ -115,7 +115,7 @@ export default function Dashboard() {
   const currentAsset = marketData[selectedCrypto];
 
   const handleLogout = async () => {
-    if (process.env.NEXT_PUBLIC_SUPABASE_URL === undefined) {
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL.includes('tu-project-ref')) {
       localStorage.removeItem('mock_session');
       router.push('/login');
       return;

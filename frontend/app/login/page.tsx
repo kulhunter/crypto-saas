@@ -19,7 +19,7 @@ export default function Login() {
     setErrorMsg('');
     
     // Simulate auth success for local dev if Supabase is not fully configured
-    if (process.env.NEXT_PUBLIC_SUPABASE_URL === undefined) {
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL.includes('tu-project-ref')) {
       if (email === 'demopro@example.com') {
         localStorage.setItem('mock_session', JSON.stringify({ user: { email }, is_pro: true }));
       } else {
