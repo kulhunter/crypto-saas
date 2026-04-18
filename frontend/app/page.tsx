@@ -9,9 +9,17 @@ export default function Dashboard() {
   const [selectedCrypto, setSelectedCrypto] = useState('BTCUSDT');
   const [marketData, setMarketData] = useState<any>({});
   const [liveCandle, setLiveCandle] = useState<CandlestickData | null>(null);
-  
-  // Dummy initial data to initialize the chart properly while waiting for websocket (In a real app, fetch historical first)
-  const initialData: CandlestickData[] = [];
+  const [historicalData, setHistoricalData] = useState<CandlestickData[]>([]);
+
+  // Fetch initial history
+  useEffect(() => {
+    fetch(`http://localhost:8000/api/history/${selectedCrypto}`)
+      .then(res => res.json())
+      .then(data => {
+        setHistoricalData(data);
+      })
+      .catch(console.error);
+  }, [selectedCrypto]);
 
   useEffect(() => {
     let ws: WebSocket;
@@ -97,13 +105,19 @@ export default function Dashboard() {
       {/* Main Chart Area */}
       <main className="main-chart">
         {/* We recreate the chart component on symbol change to reset series simply for this demo */}
-        <ChartComponent 
-          key={selectedCrypto}
-          data={initialData} 
-          liveCandle={liveCandle}
-          support={currentAsset?.scores.support}
-          resistance={currentAsset?.scores.resistance}
-        />
+        {historicalData.length > 0 ? (
+          <ChartComponent 
+            key={selectedCrypto}
+            data={historicalData} 
+            liveCandle={liveCandle}
+            support={currentAsset?.scores.support}
+            resistance={currentAsset?.scores.resistance}
+          />
+        ) : (
+          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: 'var(--text-muted)' }}>
+            Loading historical data...
+          </div>
+        )}
       </main>
 
       {/* Sidebar Right: AI Prediction Engine */}

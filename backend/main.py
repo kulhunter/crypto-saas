@@ -23,6 +23,32 @@ async def startup_event():
 def read_root():
     return {"status": "running"}
 
+@app.get("/api/history/{symbol}")
+def get_history(symbol: str):
+    """
+    Returns historical klines for the chart
+    """
+    from binance_ws import market_data
+    sym = symbol.lower()
+    if sym in market_data:
+        df = market_data[sym]
+        # Lightweight charts expects [{time: SECONDS, open: X, high: Y...}]
+        records = df.to_dict('records')
+        
+        # Convert timestamp objects to ints
+        formatted = []
+        for r in records:
+            formatted.append({
+                "time": int(r['timestamp'].timestamp()),
+                "open": r['open'],
+                "high": r['high'],
+                "low": r['low'],
+                "close": r['close'],
+                "value": r['volume']
+            })
+        return formatted
+    return []
+
 @app.get("/api/ranking")
 def get_ranking():
     """

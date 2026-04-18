@@ -62,27 +62,59 @@ def get_current_support_resistance(df: pd.DataFrame, current_price: float):
 
 def calculate_scores(df: pd.DataFrame, current_price: float, current_rsi: float, sup: float, res: float):
     """
-    Lógica de scoring y probabilidad basada en IA/Heurística (Dummy ML output integration)
-    Devuelve probabilidades y un score general
+    Score Modeled Using Technical Oscillators and Distance to Zones
     """
-    # Dummy ML Output (Reemplazar con el modelo XGBoost cuando esté entrenado)
-    dist_res = max(0, res - current_price) / res
-    dist_sup = max(0, current_price - sup) / sup
+    # Safe distance calculation avoiding DivByZero
+    dist_res = max(0.0001, res - current_price) / res
+    dist_sup = max(0.0001, current_price - sup) / sup
     
-    # Simple Heuristic para imitar un modelo entrenado
+    # Calculate MACD momentum
+    try:
+        macd_val = df['macd'].iloc[-1]
+        macd_sig = df['macd_signal'].iloc[-1]
+        momentum = macd_val - macd_sig
+    except:
+        momentum = 0
+        
+    # Moving average slopes for trend direction
+    try:
+        ema50_slope = (df['ema_50'].iloc[-1] - df['ema_50'].iloc[-5]) / df['ema_50'].iloc[-5]
+    except:
+        ema50_slope = 0
+
+    # Base Probability
     prob_up = 0.5
     prob_down = 0.5
     prob_breakout = 0.1
     
-    if current_rsi < 30 and dist_sup < 0.01:
-        prob_up = 0.75
-        prob_down = 0.25
-        prob_breakout = 0.4
+    # RSI Influence (Mean Reversion, scaled dynamically)
+    # If RSI > 70 (Overbought), it drops prob_up. If RSI < 30 (Oversold), raises prob_up.
+    rsi_factor = (50 - current_rsi) / 100 
+    prob_up += rsi_factor * 0.4
     
-    if current_rsi > 70 and dist_res < 0.01:
-        prob_up = 0.20
-        prob_down = 0.80
-        prob_breakout = 0.6
+    # Momentum Influence
+    momentum_factor = min(0.3, max(-0.3, momentum * 10))
+    prob_up += momentum_factor
+    
+    # Trend Influence
+    trend_factor = min(0.2, max(-0.2, ema50_slope * 100))
+    prob_up += trend_factor
+    
+    # Proximity Breakout Influence
+    # If we are extremely close to resistance (< 0.5%) and momentum is positive
+    if dist_res < 0.005 and momentum > 0:
+        prob_breakout = 0.5 + (0.005 - dist_res) * 100 + (momentum_factor*0.5)
+        prob_up += 0.2
+        
+    # If we are close to support dropping
+    if dist_sup < 0.005 and momentum < 0:
+        prob_breakout = 0.4 + (0.005 - dist_sup) * 100
+        prob_up -= 0.2
+        
+    # Clamp probabilities between 0.05 and 0.95
+    prob_up = min(0.95, max(0.05, prob_up))
+    prob_down = 1.0 - prob_up
+    prob_breakout = min(0.95, max(0.05, prob_breakout))
         
     score = (prob_up * 0.4) + (prob_breakout * 0.4) + ((1 - dist_res) * 0.2)
     
@@ -91,6 +123,6 @@ def calculate_scores(df: pd.DataFrame, current_price: float, current_rsi: float,
         "prob_down": round(prob_down, 2),
         "prob_breakout": round(prob_breakout, 2),
         "score": round(score * 100, 1),
-        "support": sup,
-        "resistance": res
+        "support": float(sup),
+        "resistance": float(res)
     }
