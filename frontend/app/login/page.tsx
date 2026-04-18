@@ -18,13 +18,20 @@ export default function Login() {
     setLoading(true);
     setErrorMsg('');
     
-    // Simulate auth success for local dev if Supabase is not fully configured
+    // Force mock auth for demo credentials regardless of env setup
+    if (email === 'demopro@example.com') {
+      localStorage.setItem('mock_session', JSON.stringify({ user: { email }, is_pro: true }));
+      router.push('/');
+      return;
+    } else if (email === 'free@example.com') {
+      localStorage.setItem('mock_session', JSON.stringify({ user: { email }, is_pro: false }));
+      router.push('/');
+      return;
+    }
+
+    // Existing fallback if completely missing env
     if (!process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL.includes('tu-project-ref')) {
-      if (email === 'demopro@example.com') {
-        localStorage.setItem('mock_session', JSON.stringify({ user: { email }, is_pro: true }));
-      } else {
-        localStorage.setItem('mock_session', JSON.stringify({ user: { email }, is_pro: false }));
-      }
+      localStorage.setItem('mock_session', JSON.stringify({ user: { email }, is_pro: true }));
       router.push('/');
       return;
     }
