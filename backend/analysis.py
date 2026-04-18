@@ -46,23 +46,27 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df['obv'] = (np.sign(delta) * df['volume']).fillna(0).cumsum()
     df['obv_ema'] = df['obv'].ewm(span=20, adjust=False).mean()
     
-    # Support & Resistance (Simple Local Min/Max Clustering)
-    # We will use rolling windows to find local max and min
-    df['local_max'] = df['high'] == df['high'].rolling(window=20, center=True).max()
-    df['local_min'] = df['low'] == df['low'].rolling(window=20, center=True).min()
+    # Support & Resistance (Mayor swing highs/lows)
+    # Aumentamos la ventana a 40 para detectar picos "importantes" y no ruidos
+    df['local_max'] = df['high'] == df['high'].rolling(window=40, center=True).max()
+    df['local_min'] = df['low'] == df['low'].rolling(window=40, center=True).min()
     
     return df
 
 def get_current_support_resistance(df: pd.DataFrame, current_price: float):
     """
-    Busca los soportes y resistencias más cercanos al precio actual
+    Busca los soportes y resistencias relevantes (filtrando micro-ruidos usando ATR)
     """
     try:
+        atr = df['atr'].iloc[-1]
+        
         resistances = df[df['local_max']]['high'].dropna().values
         supports = df[df['local_min']]['low'].dropna().values
         
-        nearest_resistance = [r for r in resistances if r > current_price]
-        nearest_support = [s for s in supports if s < current_price]
+        # Filtrar solo zonas que estén separadas al menos por 1 ATR de distancia
+        # Esto elimina los "pedacitos de centavos" y muestra barreras reales
+        nearest_resistance = [r for r in resistances if r > current_price + (atr * 0.5)]
+        nearest_support = [s for s in supports if s < current_price - (atr * 0.5)]
         
         res = min(nearest_resistance) if nearest_resistance else current_price * 1.05
         sup = max(nearest_support) if nearest_support else current_price * 0.95
