@@ -1,9 +1,9 @@
 1:"$Sreact.fragment"
 2:I[47257,["/crypto-saas/_next/static/chunks/0kx3u3u77v4~r.js"],"ClientPageRoot"]
-3:I[31713,["/crypto-saas/_next/static/chunks/0kx3u3u77v4~r.js","/crypto-saas/_next/static/chunks/0k1n2xv_avbfz.js","/crypto-saas/_next/static/chunks/0rj~9znp56_mc.js"],"default"]
+3:I[31713,["/crypto-saas/_next/static/chunks/0kx3u3u77v4~r.js","/crypto-saas/_next/static/chunks/0k1n2xv_avbfz.js","/crypto-saas/_next/static/chunks/13kqx1dwtdvd9.js"],"default"]
 6:I[97367,["/crypto-saas/_next/static/chunks/0kx3u3u77v4~r.js"],"OutletBoundary"]
 7:"$Sreact.suspense"
-0:{"rsc":["$","$1","c",{"children":[["$","$L2",null,{"Component":"$3","serverProvidedParams":{"searchParams":{},"params":{},"promises":["$@4","$@5"]}}],[["$","script","script-0",{"src":"/crypto-saas/_next/static/chunks/0k1n2xv_avbfz.js","async":true}],["$","script","script-1",{"src":"/crypto-saas/_next/static/chunks/0rj~9znp56_mc.js","async":true}]],["$","$L6",null,{"children":["$","$7",null,{"name":"Next.MetadataOutlet","children":"$@8"}]}]]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"lq0mP4Xh1e8LU5dAVzyKz"}
+0:{"rsc":["$","$1","c",{"children":[["$","$L2",null,{"Component":"$3","serverProvidedParams":{"searchParams":{},"params":{},"promises":["$@4","$@5"]}}],[["$","script","script-0",{"src":"/crypto-saas/_next/static/chunks/0k1n2xv_avbfz.js","async":true}],["$","script","script-1",{"src":"/crypto-saas/_next/static/chunks/13kqx1dwtdvd9.js","async":true}]],["$","$L6",null,{"children":["$","$7",null,{"name":"Next.MetadataOutlet","children":"$@8"}]}]]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"KqPbSExtYpE7wbGqXZCNe"}
 4:{}
 5:"$0:rsc:props:children:0:props:serverProvidedParams:params"
 8:null
