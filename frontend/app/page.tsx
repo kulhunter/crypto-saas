@@ -1,61 +1,19 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { useState, useEffect } from 'react';
 import ChartComponent from '../components/Chart';
-import { Activity, Zap, TrendingUp, TrendingDown, Target, Bell, Lock } from 'lucide-react';
+import { Activity, TrendingUp, TrendingDown, Target, Bell } from 'lucide-react';
 import { CandlestickData } from 'lightweight-charts';
-import { supabase } from '../utils/supabase';
 
 export default function Dashboard() {
-  const router = useRouter();
-  const [user, setUser] = useState<any>(null);
-  const [isPro, setIsPro] = useState(false);
+  // Auth removed - direct access
+  const isPro = true;
   
   const [selectedCrypto, setSelectedCrypto] = useState('BTCUSDT');
   const [selectedInterval, setSelectedInterval] = useState('1m');
   const [marketData, setMarketData] = useState<any>({});
   const [liveCandle, setLiveCandle] = useState<CandlestickData | null>(null);
   const [historicalData, setHistoricalData] = useState<CandlestickData[]>([]);
-
-  // Auth Protection
-  useEffect(() => {
-    const checkUser = async () => {
-      // Mock logic if Supabase not configured
-      if (!process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL.includes('tu-project-ref')) {
-        const session = localStorage.getItem('mock_session');
-        if (session) {
-          const parsed = JSON.parse(session);
-          setUser(parsed.user);
-          setIsPro(parsed.is_pro);
-        } else {
-          router.push('/login');
-        }
-        return;
-      }
-      
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        router.push('/login');
-      } else {
-        setUser(session.user);
-        // Supabase role/metadata logic here. Defaults to true if mock.
-        setIsPro(session.user.app_metadata?.is_pro || false);
-      }
-    };
-    
-    checkUser();
-    
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session) router.push('/login');
-      else {
-        setUser(session.user);
-        setIsPro(session.user.app_metadata?.is_pro || false);
-      }
-    });
-
-    return () => subscription.unsubscribe();
-  }, [router]);
 
   // Fetch initial history
   useEffect(() => {
@@ -114,25 +72,9 @@ export default function Dashboard() {
   const intervals = ['1m', '5m', '15m', '1h'];
   const currentAsset = marketData[selectedCrypto];
 
-  const handleLogout = async () => {
-    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL.includes('tu-project-ref')) {
-      localStorage.removeItem('mock_session');
-      router.push('/login');
-      return;
-    }
-    await supabase.auth.signOut();
-    router.push('/login');
-  };
-
   const handleCryptoSelect = (sym: string) => {
-    if (sym !== 'BTCUSDT' && !isPro) {
-      router.push('/pricing');
-      return;
-    }
     setSelectedCrypto(sym);
   };
-
-  if (!user) return null; // Wait for Auth check
 
   return (
     <div className="dashboard-container">
@@ -140,14 +82,10 @@ export default function Dashboard() {
       <header className="header">
         <div className="logo flex items-center gap-2">
           <Activity color="#2962FF" />
-          <span>CryptoSaaS {isPro ? <span className="pro-badge">PRO</span> : <span className="pro-badge" style={{background: '#333'}}>FREE</span>}</span>
+          <span>CryptoSaaS <span className="pro-badge">PRO</span></span>
         </div>
         <div className="flex gap-4 items-center">
-          <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>{user.email}</span>
-          {!isPro && (
-            <button onClick={() => router.push('/pricing')} className="button telegram-btn" style={{ padding: '5px 15px' }}>Upgrade to PRO</button>
-          )}
-          <button onClick={handleLogout} className="button" style={{ background: 'transparent', border: '1px solid var(--border)' }}>Log Out</button>
+          <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Crypto Scanner Live</span>
         </div>
       </header>
 
@@ -158,7 +96,7 @@ export default function Dashboard() {
           const symData = marketData[sym];
           const price = symData ? symData.price.toFixed(sym.startsWith('SHIB') ? 6 : 2) : 'Loading...';
           const score = symData && symData.scores ? symData.scores.score : 0;
-          const isLocked = sym !== 'BTCUSDT' && !isPro;
+          const isLocked = false; // All unlocked
           
           return (
             <div 
