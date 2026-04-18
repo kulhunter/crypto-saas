@@ -4,7 +4,7 @@ import websockets
 import pandas as pd
 import requests
 from analysis import calculate_indicators, get_current_support_resistance, calculate_scores
-from alert_manager import send_alert
+from alert_manager import send_alert, check_and_send_alerts
 from typing import Dict
 
 # InMemory Datastores
@@ -109,10 +109,8 @@ async def binance_ws_manager():
                     
                     current_state[sym][inter] = payload
                     
-                    # Logica de alertas (Solo emitir alertas fuertes en el tick de 1h)
-                    if inter == "1h" and scores['prob_breakout'] > 0.7:
-                        msg = f"\U0001F6A8 BREAKOUT ALERT: {sym.upper()} \nPrecio: {cur_price}\nResistencia: {res}\nSuporte: {sup}\nProb. Breakout: {scores['prob_breakout']*100}%"
-                        send_alert(sym, msg)
+                    # Evaluar alertas en TODOS los intervalos con la nueva función
+                    check_and_send_alerts(sym, scores, cur_price, inter)
                     
                     # Broadcast to clients
                     await broadcast(json.dumps(payload))
