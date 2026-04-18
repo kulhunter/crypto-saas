@@ -1,16 +1,61 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import ChartComponent from '../components/Chart';
-import { Activity, Zap, TrendingUp, TrendingDown, Target, Bell } from 'lucide-react';
+import { Activity, Zap, TrendingUp, TrendingDown, Target, Bell, Lock } from 'lucide-react';
 import { CandlestickData } from 'lightweight-charts';
+import { supabase } from '../utils/supabase';
 
 export default function Dashboard() {
+  const router = useRouter();
+  const [user, setUser] = useState<any>(null);
+  const [isPro, setIsPro] = useState(false);
+  
   const [selectedCrypto, setSelectedCrypto] = useState('BTCUSDT');
   const [selectedInterval, setSelectedInterval] = useState('1m');
   const [marketData, setMarketData] = useState<any>({});
   const [liveCandle, setLiveCandle] = useState<CandlestickData | null>(null);
   const [historicalData, setHistoricalData] = useState<CandlestickData[]>([]);
+
+  // Auth Protection
+  useEffect(() => {
+    const checkUser = async () => {
+      // Mock logic if Supabase not configured
+      if (process.env.NEXT_PUBLIC_SUPABASE_URL === undefined) {
+        const session = localStorage.getItem('mock_session');
+        if (session) {
+          const parsed = JSON.parse(session);
+          setUser(parsed.user);
+          setIsPro(parsed.is_pro);
+        } else {
+          router.push('/login');
+        }
+        return;
+      }
+      
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        router.push('/login');
+      } else {
+        setUser(session.user);
+        // Supabase role/metadata logic here. Defaults to true if mock.
+        setIsPro(session.user.app_metadata?.is_pro || false);
+      }
+    };
+    
+    checkUser();
+    
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) router.push('/login');
+      else {
+        setUser(session.user);
+        setIsPro(session.user.app_metadata?.is_pro || false);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [router]);
 
   // Fetch initial history
   useEffect(() => {
@@ -69,17 +114,40 @@ export default function Dashboard() {
   const intervals = ['1m', '5m', '15m', '1h'];
   const currentAsset = marketData[selectedCrypto];
 
+  const handleLogout = async () => {
+    if (process.env.NEXT_PUBLIC_SUPABASE_URL === undefined) {
+      localStorage.removeItem('mock_session');
+      router.push('/login');
+      return;
+    }
+    await supabase.auth.signOut();
+    router.push('/login');
+  };
+
+  const handleCryptoSelect = (sym: string) => {
+    if (sym !== 'BTCUSDT' && !isPro) {
+      router.push('/pricing');
+      return;
+    }
+    setSelectedCrypto(sym);
+  };
+
+  if (!user) return null; // Wait for Auth check
+
   return (
     <div className="dashboard-container">
       {/* Header */}
       <header className="header">
         <div className="logo flex items-center gap-2">
           <Activity color="#2962FF" />
-          <span>CryptoSaaS <span className="pro-badge">PRO</span></span>
+          <span>CryptoSaaS {isPro ? <span className="pro-badge">PRO</span> : <span className="pro-badge" style={{background: '#333'}}>FREE</span>}</span>
         </div>
         <div className="flex gap-4 items-center">
-          <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>user@example.com</span>
-          <button className="button" style={{ background: 'transparent', border: '1px solid var(--border)' }}>Log Out</button>
+          <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>{user.email}</span>
+          {!isPro && (
+            <button onClick={() => router.push('/pricing')} className="button telegram-btn" style={{ padding: '5px 15px' }}>Upgrade to PRO</button>
+          )}
+          <button onClick={handleLogout} className="button" style={{ background: 'transparent', border: '1px solid var(--border)' }}>Log Out</button>
         </div>
       </header>
 
@@ -89,21 +157,28 @@ export default function Dashboard() {
         {cryptoSymbols.map(sym => {
           const symData = marketData[sym];
           const price = symData ? symData.price.toFixed(sym.startsWith('SHIB') ? 6 : 2) : 'Loading...';
-          const score = symData ? symData.scores.score : 0;
+          const score = symData && symData.scores ? symData.scores.score : 0;
+          const isLocked = sym !== 'BTCUSDT' && !isPro;
           
           return (
             <div 
               key={sym}
               className={`nav-item ${selectedCrypto === sym ? 'active' : ''}`}
-              onClick={() => setSelectedCrypto(sym)}
+              onClick={() => handleCryptoSelect(sym)}
+              style={{ opacity: isLocked ? 0.5 : 1, position: 'relative' }}
             >
-              <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <div style={{ fontWeight: 'bold' }}>{sym.replace('USDT', '')}</div>
+                {isLocked && <Lock size={12} color="var(--text-muted)" />}
+              </div>
+              <div>
                 <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{price}</div>
               </div>
-              <div style={{ color: score > 70 ? 'var(--accent-up)' : 'var(--text-muted)' }}>
-                ★ {score}
-              </div>
+              {!isLocked && (
+                <div style={{ color: score > 70 ? 'var(--accent-up)' : 'var(--text-muted)', position: 'absolute', right: '15px' }}>
+                  ★ {score}
+                </div>
+              )}
             </div>
           );
         })}
@@ -210,9 +285,21 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <button className="button telegram-btn mt-auto">
-              <Bell size={18} /> Configure Telegram Alerts
-            </button>
+            <div className="panel-card mt-auto" style={{ border: '1px solid var(--border)', background: 'var(--bg-panel)' }}>
+              <div style={{ marginBottom: '10px' }}>
+                <h4 style={{ margin: 0, fontSize: '0.9rem' }}>Telegram Alerts</h4>
+                <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-muted)' }}>Get notified on breakouts</p>
+              </div>
+              {isPro ? (
+                <button className="button telegram-btn" style={{ width: '100%' }}>
+                  <Bell size={16} /> Configure Bot
+                </button>
+              ) : (
+                <button onClick={() => router.push('/pricing')} className="button" style={{ width: '100%', background: '#333', color: '#888' }}>
+                  <Lock size={16} /> PRO Feature
+                </button>
+              )}
+            </div>
           </>
         ) : (
           <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)' }}>
