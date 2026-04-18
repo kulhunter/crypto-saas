@@ -107,7 +107,6 @@ export default function Dashboard() {
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <div style={{ fontWeight: 'bold' }}>{sym.replace('USDT', '')}</div>
-                {isLocked && <Lock size={12} color="var(--text-muted)" />}
               </div>
               <div>
                 <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{price}</div>
@@ -228,15 +227,9 @@ export default function Dashboard() {
                 <h4 style={{ margin: 0, fontSize: '0.9rem' }}>Telegram Alerts</h4>
                 <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-muted)' }}>Get notified on breakouts</p>
               </div>
-              {isPro ? (
-                <button className="button telegram-btn" style={{ width: '100%' }}>
-                  <Bell size={16} /> Configure Bot
-                </button>
-              ) : (
-                <button onClick={() => router.push('/pricing')} className="button" style={{ width: '100%', background: '#333', color: '#888' }}>
-                  <Lock size={16} /> PRO Feature
-                </button>
-              )}
+              <button className="button telegram-btn" style={{ width: '100%' }}>
+                <Bell size={16} /> Configure Bot
+              </button>
             </div>
           </>
         ) : (
