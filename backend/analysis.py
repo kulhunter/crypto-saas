@@ -35,6 +35,17 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df['true_range'] = np.max(ranges, axis=1)
     df['atr'] = df['true_range'].rolling(14).mean()
     
+    # Bollinger Bands
+    df['sma_20'] = close.rolling(window=20).mean()
+    df['std_20'] = close.rolling(window=20).std()
+    df['bb_upper'] = df['sma_20'] + (df['std_20'] * 2)
+    df['bb_lower'] = df['sma_20'] - (df['std_20'] * 2)
+    df['percent_b'] = (close - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
+
+    # OBV (On Balance Volume)
+    df['obv'] = (np.sign(delta) * df['volume']).fillna(0).cumsum()
+    df['obv_ema'] = df['obv'].ewm(span=20, adjust=False).mean()
+    
     # Support & Resistance (Simple Local Min/Max Clustering)
     # We will use rolling windows to find local max and min
     df['local_max'] = df['high'] == df['high'].rolling(window=20, center=True).max()
@@ -81,6 +92,13 @@ def calculate_scores(df: pd.DataFrame, current_price: float, current_rsi: float,
         ema50_slope = (df['ema_50'].iloc[-1] - df['ema_50'].iloc[-5]) / df['ema_50'].iloc[-5]
     except:
         ema50_slope = 0
+        
+    try:
+        obv_trend = (df['obv'].iloc[-1] - df['obv_ema'].iloc[-1]) / df['obv_ema'].iloc[-1]
+        percent_b = df['percent_b'].iloc[-1]
+    except:
+        obv_trend = 0
+        percent_b = 0.5
 
     # Base Probability
     prob_up = 0.5
@@ -100,10 +118,22 @@ def calculate_scores(df: pd.DataFrame, current_price: float, current_rsi: float,
     trend_factor = min(0.2, max(-0.2, ema50_slope * 100))
     prob_up += trend_factor
     
+    # OBV Supply/Demand Influence
+    obv_factor = min(0.2, max(-0.2, obv_trend * 5))
+    prob_up += obv_factor
+    
+    # Bollinger Squeeze / Extremes
+    if percent_b > 1.0: # Piercing upper band (Reversal likely)
+        prob_up -= 0.15
+        prob_down += 0.2
+    elif percent_b < 0.0: # Piercing lower band (Bounce likely)
+        prob_up += 0.15
+        prob_down -= 0.2
+        
     # Proximity Breakout Influence
     # If we are extremely close to resistance (< 0.5%) and momentum is positive
     if dist_res < 0.005 and momentum > 0:
-        prob_breakout = 0.5 + (0.005 - dist_res) * 100 + (momentum_factor*0.5)
+        prob_breakout = 0.5 + (0.005 - dist_res) * 100 + (momentum_factor*0.5) + max(0, obv_factor)
         prob_up += 0.2
         
     # If we are close to support dropping
@@ -116,7 +146,8 @@ def calculate_scores(df: pd.DataFrame, current_price: float, current_rsi: float,
     prob_down = 1.0 - prob_up
     prob_breakout = min(0.95, max(0.05, prob_breakout))
         
-    score = (prob_up * 0.4) + (prob_breakout * 0.4) + ((1 - dist_res) * 0.2)
+    # Advanced Score Model
+    score = (prob_up * 0.4) + (prob_breakout * 0.45) + ((1 - dist_res) * 0.15)
     
     return {
         "prob_up": round(prob_up, 2),

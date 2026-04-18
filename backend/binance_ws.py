@@ -8,14 +8,15 @@ from alert_manager import send_alert
 from typing import Dict
 
 # InMemory Datastores
-market_data: Dict[str, pd.DataFrame] = {}
-current_state: Dict[str, dict] = {}
+market_data: Dict[str, Dict[str, pd.DataFrame]] = {}
+current_state: Dict[str, Dict[str, dict]] = {}
 connections: set = set()
 
 SYMBOLS = ["btcusdt", "ethusdt", "bnbusdt", "solusdt"]
+INTERVALS = ["1m", "5m", "15m", "1h"]
 
-def fetch_historical_data(symbol: str):
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol.upper()}&interval=1s&limit=200"
+def fetch_historical_data(symbol: str, interval: str):
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol.upper()}&interval={interval}&limit=200"
     resp = requests.get(url)
     data = resp.json()
     
@@ -32,18 +33,31 @@ def fetch_historical_data(symbol: str):
 async def binance_ws_manager():
     # Pre-fetch historical data to prime the indicators
     for sym in SYMBOLS:
-        market_data[sym] = fetch_historical_data(sym)
+        market_data[sym] = {}
+        current_state[sym] = {}
+        for inter in INTERVALS:
+            market_data[sym][inter] = fetch_historical_data(sym, inter)
         
-    streams = "/".join([f"{sym}@kline_1s" for sym in SYMBOLS])
-    url = f"wss://stream.binance.com:9443/ws/{streams}"
+    streams = []
+    for sym in SYMBOLS:
+        for inter in INTERVALS:
+            streams.append(f"{sym}@kline_{inter}")
+            
+    url = f"wss://stream.binance.com:9443/ws/{'/'.join(streams)}"
     
     async for websocket in websockets.connect(url):
         try:
-            print("Connected to Binance WS")
+            print("Connected to Binance WS for multi-timeframes")
             async for message in websocket:
                 data = json.loads(message)
                 sym = data['s'].lower()
+                # Binance stream names carry interval in 'k' object
                 k = data['k']
+                inter = k['i']
+                
+                # Check if it's a supported interval
+                if inter not in INTERVALS:
+                    continue
                 
                 # Append live candle
                 new_row = pd.DataFrame([{
@@ -55,7 +69,7 @@ async def binance_ws_manager():
                     'volume': float(k['v'])
                 }])
                 
-                df = market_data[sym]
+                df = market_data[sym][inter]
                 
                 # If it's a closed candle or we are just updating the latest
                 if df['timestamp'].iloc[-1] == pd.to_datetime(k['t'], unit='ms'):
@@ -70,7 +84,7 @@ async def binance_ws_manager():
                     if len(df) > 500:
                         df = df.iloc[-500:]
                 
-                market_data[sym] = df
+                market_data[sym][inter] = df
                 
                 # Calculate indicators & scores
                 if len(df) > 50:
@@ -82,6 +96,7 @@ async def binance_ws_manager():
                     
                     payload = {
                         "symbol": sym.upper(),
+                        "interval": inter,
                         "price": cur_price,
                         "time": int(k['t'] / 1000),
                         "open": float(k['o']),
@@ -92,10 +107,10 @@ async def binance_ws_manager():
                         "rsi": round(rsi, 2) if pd.notna(rsi) else 50
                     }
                     
-                    current_state[sym] = payload
+                    current_state[sym][inter] = payload
                     
-                    # Logica de alertas
-                    if scores['prob_breakout'] > 0.7:
+                    # Logica de alertas (Solo emitir alertas fuertes en el tick de 1h)
+                    if inter == "1h" and scores['prob_breakout'] > 0.7:
                         msg = f"\U0001F6A8 BREAKOUT ALERT: {sym.upper()} \nPrecio: {cur_price}\nResistencia: {res}\nSuporte: {sup}\nProb. Breakout: {scores['prob_breakout']*100}%"
                         send_alert(sym, msg)
                     

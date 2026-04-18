@@ -24,14 +24,14 @@ def read_root():
     return {"status": "running"}
 
 @app.get("/api/history/{symbol}")
-def get_history(symbol: str):
+def get_history(symbol: str, interval: str = "1m"):
     """
     Returns historical klines for the chart
     """
     from binance_ws import market_data
     sym = symbol.lower()
-    if sym in market_data:
-        df = market_data[sym]
+    if sym in market_data and interval in market_data[sym]:
+        df = market_data[sym][interval]
         # Lightweight charts expects [{time: SECONDS, open: X, high: Y...}]
         records = df.to_dict('records')
         
@@ -50,12 +50,16 @@ def get_history(symbol: str):
     return []
 
 @app.get("/api/ranking")
-def get_ranking():
+def get_ranking(interval: str = "1h"):
     """
-    Returns current ranking ordered by score
+    Returns current ranking ordered by score based on the interval
     """
-    items = list(current_state.values())
-    sorted_items = sorted(items, key=lambda x: x['scores']['score'], reverse=True)
+    items = []
+    for sym_data in current_state.values():
+        if interval in sym_data:
+            items.append(sym_data[interval])
+            
+    sorted_items = sorted(items, key=lambda x: x['scores']['score'] if 'scores' in x else 0, reverse=True)
     return {"ranking": sorted_items}
 
 @app.post("/api/checkout")
@@ -70,9 +74,10 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     connections.add(websocket)
     try:
-        # Send current initial state for all pairs immediately
-        for sym, state in current_state.items():
-            await websocket.send_json(state)
+        # Send current initial state
+        for sym, intervals_dict in current_state.items():
+            for interval, state in intervals_dict.items():
+                await websocket.send_json(state)
             
         while True:
             # Client must keep connection alive

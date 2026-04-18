@@ -7,19 +7,21 @@ import { CandlestickData } from 'lightweight-charts';
 
 export default function Dashboard() {
   const [selectedCrypto, setSelectedCrypto] = useState('BTCUSDT');
+  const [selectedInterval, setSelectedInterval] = useState('1m');
   const [marketData, setMarketData] = useState<any>({});
   const [liveCandle, setLiveCandle] = useState<CandlestickData | null>(null);
   const [historicalData, setHistoricalData] = useState<CandlestickData[]>([]);
 
   // Fetch initial history
   useEffect(() => {
-    fetch(`http://localhost:8000/api/history/${selectedCrypto}`)
+    setHistoricalData([]);
+    fetch(`http://localhost:8000/api/history/${selectedCrypto}?interval=${selectedInterval}`)
       .then(res => res.json())
       .then(data => {
         setHistoricalData(data);
       })
       .catch(console.error);
-  }, [selectedCrypto]);
+  }, [selectedCrypto, selectedInterval]);
 
   useEffect(() => {
     let ws: WebSocket;
@@ -31,12 +33,16 @@ export default function Dashboard() {
       
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
-        setMarketData(prev => ({
-          ...prev,
-          [data.symbol]: data
-        }));
+        
+        // Mantener data solo del intervalo actual en memoria visual o todos
+        if (data.interval === selectedInterval) {
+          setMarketData((prev: any) => ({
+            ...prev,
+            [data.symbol]: data
+          }));
+        }
 
-        if (data.symbol === selectedCrypto) {
+        if (data.symbol === selectedCrypto && data.interval === selectedInterval) {
           setLiveCandle({
             time: data.time as any,
             open: data.open,
@@ -57,9 +63,10 @@ export default function Dashboard() {
     return () => {
       if (ws) ws.close();
     };
-  }, [selectedCrypto]);
+  }, [selectedCrypto, selectedInterval]);
 
   const cryptoSymbols = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT'];
+  const intervals = ['1m', '5m', '15m', '1h'];
   const currentAsset = marketData[selectedCrypto];
 
   return (
@@ -103,31 +110,53 @@ export default function Dashboard() {
       </aside>
 
       {/* Main Chart Area */}
-      <main className="main-chart">
-        {/* We recreate the chart component on symbol change to reset series simply for this demo */}
-        {historicalData.length > 0 ? (
-          <ChartComponent 
-            key={selectedCrypto}
-            data={historicalData} 
-            liveCandle={liveCandle}
-            support={currentAsset?.scores.support}
-            resistance={currentAsset?.scores.resistance}
-          />
-        ) : (
-          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: 'var(--text-muted)' }}>
-            Loading historical data...
-          </div>
-        )}
+      <main className="main-chart" style={{ display: 'flex', flexDirection: 'column' }}>
+        {/* Toolbar superior para el chart */}
+        <div style={{ padding: '10px', display: 'flex', gap: '10px', borderBottom: '1px solid var(--border)' }}>
+          {intervals.map(inter => (
+            <button 
+              key={inter} 
+              onClick={() => setSelectedInterval(inter)}
+              style={{
+                background: selectedInterval === inter ? '#2962FF' : 'transparent',
+                color: selectedInterval === inter ? '#fff' : 'var(--text-muted)',
+                border: '1px solid #2B3139',
+                padding: '5px 12px',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}
+            >
+              {inter}
+            </button>
+          ))}
+        </div>
+        
+        <div style={{ flex: 1, position: 'relative' }}>
+          {/* We recreate the chart component on symbol change to reset series simply for this demo */}
+          {historicalData.length > 0 ? (
+            <ChartComponent 
+              key={`${selectedCrypto}-${selectedInterval}`}
+              data={historicalData} 
+              liveCandle={liveCandle}
+              support={currentAsset?.scores?.support}
+              resistance={currentAsset?.scores?.resistance}
+            />
+          ) : (
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: 'var(--text-muted)' }}>
+              Loading historical data...
+            </div>
+          )}
+        </div>
       </main>
 
       {/* Sidebar Right: AI Prediction Engine */}
       <aside className="sidebar-right">
-        {currentAsset ? (
+        {currentAsset && currentAsset.scores ? (
           <>
             <div className="panel-card">
-              <h3>Target Asset</h3>
+              <h3>Target Asset & Interval</h3>
               <div style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '5px' }}>
-                {selectedCrypto.replace('USDT', '')}
+                {selectedCrypto.replace('USDT', '')} <span style={{fontSize:'1rem', color:'var(--text-muted)'}}>({selectedInterval})</span>
               </div>
               <div style={{ fontSize: '2rem', fontFamily: 'monospace' }}>
                 ${currentAsset.price.toFixed(2)}
