@@ -1,6 +1,6 @@
 "use client";
 import React, { useEffect, useRef } from 'react';
-import { createChart, IChartApi, ISeriesApi, LineData, Time, CandlestickData, CandlestickSeries, LineSeries } from 'lightweight-charts';
+import { createChart, IChartApi, ISeriesApi, LineData, Time, CandlestickData, CandlestickSeries, LineSeries, ColorType } from 'lightweight-charts';
 
 interface ChartProps {
   data: CandlestickData[];
@@ -20,7 +20,7 @@ export default function ChartComponent({ data, liveCandle, support, resistance }
     if (chartContainerRef.current) {
       const chart = createChart(chartContainerRef.current, {
         layout: {
-          background: { type: 'solid', color: '#151924' },
+          background: { type: ColorType.Solid, color: '#151924' },
           textColor: '#D1D4DC',
         },
         grid: {
