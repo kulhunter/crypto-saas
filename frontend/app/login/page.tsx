@@ -15,23 +15,21 @@ export default function Login() {
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
-    setErrorMsg('');
-    
     // Force mock auth for demo credentials regardless of env setup
-    if (email === 'demopro@example.com') {
-      localStorage.setItem('mock_session', JSON.stringify({ user: { email }, is_pro: true }));
+    const cleanEmail = email.trim().toLowerCase();
+    if (cleanEmail === 'demopro@example.com') {
+      localStorage.setItem('mock_session', JSON.stringify({ user: { email: cleanEmail }, is_pro: true }));
       router.push('/');
       return;
-    } else if (email === 'free@example.com') {
-      localStorage.setItem('mock_session', JSON.stringify({ user: { email }, is_pro: false }));
+    } else if (cleanEmail === 'free@example.com') {
+      localStorage.setItem('mock_session', JSON.stringify({ user: { email: cleanEmail }, is_pro: false }));
       router.push('/');
       return;
     }
 
     // Existing fallback if completely missing env
     if (!process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL.includes('tu-project-ref')) {
-      localStorage.setItem('mock_session', JSON.stringify({ user: { email }, is_pro: true }));
+      localStorage.setItem('mock_session', JSON.stringify({ user: { email: cleanEmail }, is_pro: true }));
       router.push('/');
       return;
     }
