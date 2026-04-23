@@ -244,7 +244,7 @@ export default function Dashboard() {
                   <BarChart3 className="w-4 h-4" />
                   <div className="text-left">
                     <span className="font-bold text-sm">{s}</span>
-                    {selectedSym === s && <div className="text-[11px] opacity-60">${currentPrice.toLocaleString()}</div>}
+                    {selectedSym === s && currentPrice > 0 && <div className="text-[11px] opacity-60">${currentPrice.toLocaleString()}</div>}
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5">
@@ -426,8 +426,8 @@ export default function Dashboard() {
               </div>
             </div>
             <div className="flex flex-col items-center md:items-end gap-2 shrink-0">
-              <a href="mailto:dan.tagle2023@gmail.com" className="flex items-center gap-1.5 text-xs hover:text-brand transition-colors">
-                <Mail className="w-3.5 h-3.5" /> dan.tagle2023@gmail.com
+              <a href={`mailto:dan.tagle2023@gmail.com`} className="flex items-center gap-1.5 text-xs hover:text-brand transition-colors">
+                <Mail className="w-3.5 h-3.5" /> <span suppressHydrationWarning>{"dan.tagle2023" + "@" + "gmail.com"}</span>
               </a>
               <span className="text-[10px] text-gray-600 font-semibold">by dantagle.cl</span>
             </div>
