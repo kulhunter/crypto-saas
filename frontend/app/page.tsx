@@ -76,7 +76,10 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!chartContainerRef.current) return;
-    if (chartRef.current) chartRef.current.remove();
+
+    setCandles([]);
+    setScoreData(null);
+    setCurrentPrice(0);
 
     const chart = createChart(chartContainerRef.current, {
       layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: "#666" },
@@ -151,10 +154,21 @@ export default function Dashboard() {
          if (isMounted) setLoading(false);
       });
 
-    const onResize = () => chart.applyOptions({ width: chartContainerRef.current?.clientWidth });
+    const onResize = () => {
+        if (chartContainerRef.current && chartRef.current) {
+            chartRef.current.applyOptions({ width: chartContainerRef.current.clientWidth });
+        }
+    };
     window.addEventListener("resize", onResize);
     
-    return () => { isMounted = false; window.removeEventListener("resize", onResize); chart.remove(); };
+    return () => { 
+        isMounted = false; 
+        window.removeEventListener("resize", onResize); 
+        if (chartRef.current) {
+            chartRef.current.remove();
+            chartRef.current = null;
+        }
+    };
   }, [selectedSym, timeframe]);
 
   useEffect(() => {
