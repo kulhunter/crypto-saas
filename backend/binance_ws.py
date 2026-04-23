@@ -3,9 +3,10 @@ import json
 import websockets
 import pandas as pd
 import requests
-from analysis import calculate_indicators, get_current_support_resistance, calculate_scores
-from alert_manager import send_alert, check_and_send_alerts
+from analysis import calculate_indicators, calculate_scores
+from alert_manager import check_and_send_alerts
 from typing import Dict
+import os
 
 # InMemory Datastores
 market_data: Dict[str, Dict[str, pd.DataFrame]] = {}
@@ -13,11 +14,12 @@ current_state: Dict[str, Dict[str, dict]] = {}
 connections: set = set()
 
 SYMBOLS = ["btcusdt", "ethusdt", "bnbusdt", "solusdt"]
-INTERVALS = ["1m", "5m", "15m", "1h"]
+INTERVALS = ["1m", "1h", "1d"] # 1m will be used to aggregate 10m
 
 def fetch_historical_data(symbol: str, interval: str):
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol.upper()}&interval={interval}&limit=200"
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol.upper()}&interval={interval}&limit=1000"
     resp = requests.get(url)
+    if resp.status_code != 200: return pd.DataFrame()
     data = resp.json()
     
     df = pd.DataFrame(data, columns=[
@@ -30,105 +32,105 @@ def fetch_historical_data(symbol: str, interval: str):
         
     return df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
 
+def aggregate_dataframe(df: pd.DataFrame, minutes: int):
+    """Aggregates 1m dataframe into X minute candles"""
+    if df.empty: return df
+    df = df.set_index('timestamp')
+    agg_df = df.resample(f'{minutes}T').agg({
+        'open': 'first',
+        'high': 'max',
+        'low': 'min',
+        'close': 'last',
+        'volume': 'sum'
+    }).dropna()
+    return agg_df.reset_index()
+
 async def binance_ws_manager():
-    # Pre-fetch historical data to prime the indicators
+    # Pre-fetch historical data
     for sym in SYMBOLS:
         market_data[sym] = {}
         current_state[sym] = {}
         for inter in INTERVALS:
+            print(f"Fetching history for {sym} {inter}")
             market_data[sym][inter] = fetch_historical_data(sym, inter)
         
-    streams = []
-    for sym in SYMBOLS:
-        for inter in INTERVALS:
-            streams.append(f"{sym}@kline_{inter}")
-            
+    streams = [f"{sym}@kline_{inter}" for sym in SYMBOLS for inter in INTERVALS]
     url = f"wss://stream.binance.com:9443/ws/{'/'.join(streams)}"
     
     async for websocket in websockets.connect(url):
         try:
-            print("Connected to Binance WS for multi-timeframes")
+            print("Connected to Binance WebSocket")
             async for message in websocket:
                 data = json.loads(message)
                 sym = data['s'].lower()
-                # Binance stream names carry interval in 'k' object
                 k = data['k']
                 inter = k['i']
                 
-                # Check if it's a supported interval
-                if inter not in INTERVALS:
-                    continue
-                
-                # Append live candle
-                new_row = pd.DataFrame([{
+                # Update base data
+                new_row = {
                     'timestamp': pd.to_datetime(k['t'], unit='ms'),
                     'open': float(k['o']),
                     'high': float(k['h']),
                     'low': float(k['l']),
                     'close': float(k['c']),
                     'volume': float(k['v'])
-                }])
+                }
                 
                 df = market_data[sym][inter]
-                
-                # If it's a closed candle or we are just updating the latest
-                if df['timestamp'].iloc[-1] == pd.to_datetime(k['t'], unit='ms'):
-                    df.iloc[-1, df.columns.get_loc('open')] = float(k['o'])
-                    df.iloc[-1, df.columns.get_loc('high')] = float(k['h'])
-                    df.iloc[-1, df.columns.get_loc('low')] = float(k['l'])
-                    df.iloc[-1, df.columns.get_loc('close')] = float(k['c'])
-                    df.iloc[-1, df.columns.get_loc('volume')] = float(k['v'])
+                if not df.empty and df['timestamp'].iloc[-1] == new_row['timestamp']:
+                    df.iloc[-1] = [new_row['timestamp'], new_row['open'], new_row['high'], new_row['low'], new_row['close'], new_row['volume']]
                 else:
-                    df = pd.concat([df, new_row], ignore_index=True)
-                    # Keep memory bounded
-                    if len(df) > 500:
-                        df = df.iloc[-500:]
-                
+                    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True).tail(1000)
                 market_data[sym][inter] = df
+
+                # Special: Aggregate 10m from 1m
+                if inter == "1m":
+                    df_10m = aggregate_dataframe(df, 10)
+                    process_and_broadcast(sym, "10m", df_10m)
                 
-                # Calculate indicators & scores
-                if len(df) > 50:
-                    analyzed_df = calculate_indicators(df)
-                    cur_price = float(k['c'])
-                    sup, res = get_current_support_resistance(analyzed_df, cur_price)
-                    rsi = analyzed_df['rsi'].iloc[-1]
-                    scores = calculate_scores(analyzed_df, cur_price, rsi if pd.notna(rsi) else 50, sup, res)
-                    
-                    payload = {
-                        "symbol": sym.upper(),
-                        "interval": inter,
-                        "price": cur_price,
-                        "time": int(k['t'] / 1000),
-                        "open": float(k['o']),
-                        "high": float(k['h']),
-                        "low": float(k['l']),
-                        "close": float(k['c']),
-                        "scores": scores,
-                        "rsi": round(rsi, 2) if pd.notna(rsi) else 50
-                    }
-                    
-                    current_state[sym][inter] = payload
-                    
-                    # Evaluar alertas en TODOS los intervalos con la nueva función
-                    check_and_send_alerts(sym, scores, cur_price, inter)
-                    
-                    # Broadcast to clients
-                    await broadcast(json.dumps(payload))
-                    
-        except websockets.ConnectionClosed:
-            print("Binance connection closed, reconnecting...")
-            await asyncio.sleep(5)
-            continue
+                # Process the native interval
+                process_and_broadcast(sym, inter, df)
+
         except Exception as e:
-            print(f"Error in Binance WS: {e}")
+            print(f"Binance WS Error: {e}")
             await asyncio.sleep(5)
+
+def process_and_broadcast(sym: str, interval: str, df: pd.DataFrame):
+    if len(df) < 50: return
+    
+    # Calculate indicators
+    analyzed_df = calculate_indicators(df)
+    last_row = analyzed_df.tail(1).iloc[0]
+    
+    # Calculate score/prediction
+    scores = calculate_scores(analyzed_df, last_row['close'], sym)
+    
+    payload = {
+        "symbol": sym.upper(),
+        "interval": interval,
+        "price": last_row['close'],
+        "time": int(last_row['timestamp'].timestamp()),
+        "open": last_row['open'],
+        "high": last_row['high'],
+        "low": last_row['low'],
+        "close": last_row['close'],
+        "scores": scores,
+    }
+    
+    current_state[sym][interval] = payload
+    
+    # Send signals to Telegram (Alert Manager)
+    asyncio.create_task(check_and_send_alerts(sym, scores, last_row['close'], interval))
+    
+    # Broadcast to frontend
+    asyncio.create_task(broadcast(json.dumps(payload)))
 
 async def broadcast(message: str):
     if connections:
-        dead_connections = set()
+        dead = set()
         for ws in connections:
             try:
                 await ws.send_text(message)
-            except Exception:
-                dead_connections.add(ws)
-        connections.difference_update(dead_connections)
+            except:
+                dead.add(ws)
+        connections.difference_update(dead)

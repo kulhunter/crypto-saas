@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Crypto SaaS | AI Powered Trading",
-  description: "Real-time AI crypto predictions, dynamic support/resistances and automated Telegram alerts.",
+  title: "CriptoBot Pro | Algoritmo de Predicción IA para Scalpers",
+  description: "Análisis técnico profesional, correlación macro SP500/DXY y señales en tiempo real para Bitcoin, Ethereum, Solana y BNB. Hecho por dantagle.cl",
 };
 
 export default function RootLayout({

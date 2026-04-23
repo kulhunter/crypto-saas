@@ -1,365 +1,438 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
-import ChartComponent from '../components/Chart';
-import { Activity, TrendingUp, TrendingDown, Target, Bell } from 'lucide-react';
-import { CandlestickData } from 'lightweight-charts';
+import React, { useEffect, useState, useRef } from 'react';
+import { createChart, ColorType, ISeriesApi, CandlestickData } from 'lightweight-charts';
+import { 
+  TrendingUp, TrendingDown, Lock, Zap, 
+  BarChart3, Globe, ShieldCheck, Mail, CreditCard,
+  ChevronRight, Smartphone, LayoutDashboard, Menu, X
+} from 'lucide-react';
 
-const BINANCE_REST = 'https://api.binance.com/api/v3';
-const BINANCE_WS   = 'wss://stream.binance.com:9443/ws';
-
-// ──────────────────────────────────────────────
-// Client-side AI scoring (mirrors backend logic)
-// ──────────────────────────────────────────────
-function calcEMA(data: number[], period: number): number[] {
-  const k = 2 / (period + 1);
-  return data.reduce((acc: number[], val, i) => {
-    acc.push(i === 0 ? val : val * k + acc[i - 1] * (1 - k));
-    return acc;
-  }, []);
+// --- Types ---
+interface MacroData {
+  symbol: string;
+  price: number;
+  change: number;
 }
 
-function calcRSI(closes: number[], period = 14): number {
-  const deltas = closes.slice(1).map((v, i) => v - closes[i]);
-  const gains  = deltas.map(d => (d > 0 ? d : 0));
-  const losses = deltas.map(d => (d < 0 ? -d : 0));
-  const avgG = gains.slice(-period).reduce((a, b) => a + b, 0) / period;
-  const avgL = losses.slice(-period).reduce((a, b) => a + b, 0) / period;
-  if (avgL === 0) return 100;
-  return 100 - 100 / (1 + avgG / avgL);
+interface ScoreData {
+  score: number;
+  prob_up: number;
+  prob_down: number;
+  reasons: string[];
+  support: number;
+  resistance: number;
 }
 
-function calcScore(closes: number[], volumes: number[], highs: number[], lows: number[]) {
-  const close = closes[closes.length - 1];
-  const rsi = calcRSI(closes);
-  const ema20 = calcEMA(closes, 20);
-  const ema50 = calcEMA(closes, 50);
-  const ema12 = calcEMA(closes, 12);
-  const ema26 = calcEMA(closes, 26);
-  const macd  = ema12[ema12.length - 1] - ema26[ema26.length - 1];
-  const macdSignal = calcEMA(ema12.map((v, i) => v - ema26[i]), 9);
-  const momentum = macd - macdSignal[macdSignal.length - 1];
-
-  // Bollinger %B
-  const sma20 = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
-  const std20 = Math.sqrt(closes.slice(-20).reduce((a, b) => a + (b - sma20) ** 2, 0) / 20);
-  const bbUpper = sma20 + std20 * 2;
-  const bbLower = sma20 - std20 * 2;
-  const pctB = (close - bbLower) / (bbUpper - bbLower);
-
-  // OBV trend
-  const obv = closes.slice(1).reduce((acc, v, i) => {
-    return acc + (v > closes[i] ? volumes[i + 1] : -volumes[i + 1]);
-  }, 0);
-  const obvEMA = calcEMA(closes.map((_, i) => {
-    let o = 0;
-    for (let j = 1; j <= i; j++) o += closes[j] > closes[j - 1] ? volumes[j] : -volumes[j];
-    return o;
-  }), 20);
-  const obvTrend = obvEMA.length ? (obv - obvEMA[obvEMA.length - 1]) / (Math.abs(obvEMA[obvEMA.length - 1]) || 1) : 0;
-
-  // Support / Resistance (rolling 40-period pivots)
-  const windowH = highs.slice(-40);
-  const windowL = lows.slice(-40);
-  const maxH = Math.max(...windowH);
-  const minL = Math.min(...windowL);
-  const atr  = highs.slice(-14).reduce((a, v, i) => a + (v - lows[lows.length - 14 + i]), 0) / 14;
-
-  const res = maxH > close + atr * 0.5 ? maxH : close * 1.05;
-  const sup = minL < close - atr * 0.5 ? minL : close * 0.95;
-
-  const distRes = Math.max(0.0001, (res - close) / res);
-  const distSup = Math.max(0.0001, (close - sup) / sup);
-
-  let probUp = 0.5;
-  const rsiFactor = (50 - rsi) / 100;
-  probUp += rsiFactor * 0.4;
-
-  const momFactor = Math.min(0.3, Math.max(-0.3, momentum * 10));
-  probUp += momFactor;
-
-  const ema50Slope = ema50.length > 5
-    ? (ema50[ema50.length - 1] - ema50[ema50.length - 5]) / ema50[ema50.length - 5]
-    : 0;
-  probUp += Math.min(0.2, Math.max(-0.2, ema50Slope * 100));
-
-  const obvFactor = Math.min(0.2, Math.max(-0.2, obvTrend * 5));
-  probUp += obvFactor;
-
-  if (pctB > 1) probUp -= 0.15;
-  else if (pctB < 0) probUp += 0.15;
-
-  let probBreakout = 0.1;
-  if (distRes < 0.005 && momentum > 0) probBreakout = 0.5 + (0.005 - distRes) * 100 + Math.max(0, momFactor);
-  if (distSup < 0.005 && momentum < 0) probBreakout = 0.4 + (0.005 - distSup) * 100;
-
-  probUp = Math.min(0.95, Math.max(0.05, probUp));
-  const probDown = 1 - probUp;
-  probBreakout = Math.min(0.95, Math.max(0.05, probBreakout));
-  const score = (probUp * 0.4 + probBreakout * 0.45 + (1 - distRes) * 0.15) * 100;
-
-  return { probUp, probDown, probBreakout, score: Math.round(score * 10) / 10, support: sup, resistance: res };
+interface MarketState {
+  price: number;
+  scores: ScoreData;
+  time: number;
 }
 
-// ──────────────────────────────────────────────
+// --- Config ---
+const SYMBOLS = ["BTC", "ETH", "SOL", "BNB"];
+const PRO_SYMBOLS = ["ETH", "SOL", "BNB"];
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const WS_BASE = API_BASE.replace("http", "ws");
+
 export default function Dashboard() {
-  const SYMBOLS   = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT'];
-  const INTERVALS = ['1m', '5m', '15m', '1h'];
+  const [selectedSym, setSelectedSym] = useState("BTC");
+  const [interval, setInterval] = useState("1h");
+  const [marketData, setMarketData] = useState<Record<string, Record<string, MarketState>>>({});
+  const [macro, setMacro] = useState<MacroData[]>([]);
+  const [license, setLicense] = useState("");
+  const [isLocked, setIsLocked] = useState(false);
+  const [fingerprint, setFingerprint] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
+  
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<any>(null);
+  const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
 
-  const [selectedCrypto, setSelectedCrypto]   = useState('BTCUSDT');
-  const [selectedInterval, setSelectedInterval] = useState('1m');
-  const [marketData, setMarketData]             = useState<any>({});
-  const [liveCandle, setLiveCandle]             = useState<CandlestickData | null>(null);
-  const [historicalData, setHistoricalData]     = useState<CandlestickData[]>([]);
-  const [scores, setScores]                     = useState<any>(null);
-  const wsRef = useRef<WebSocket | null>(null);
-
-  // Fetch historical klines from Binance REST
+  // Initialize fingerprint (simplified)
   useEffect(() => {
-    setHistoricalData([]);
-    setScores(null);
-    const sym = selectedCrypto;
-    const inter = selectedInterval;
-    fetch(`${BINANCE_REST}/klines?symbol=${sym}&interval=${inter}&limit=200`)
-      .then(r => r.json())
-      .then((raw: any[]) => {
-        const candles: CandlestickData[] = raw.map(k => ({
-          time: Math.floor(k[0] / 1000) as any,
-          open: parseFloat(k[1]),
-          high: parseFloat(k[2]),
-          low: parseFloat(k[3]),
-          close: parseFloat(k[4]),
-        }));
-        setHistoricalData(candles);
+    const fp = localStorage.getItem("cb_fp") || Math.random().toString(36).substring(2, 15);
+    localStorage.setItem("cb_fp", fp);
+    setFingerprint(fp);
+    const savedKey = localStorage.getItem("cb_key") || "";
+    setLicense(savedKey);
+  }, []);
 
-        // Calculate initial score
-        const closes  = raw.map(k => parseFloat(k[4]));
-        const volumes = raw.map(k => parseFloat(k[5]));
-        const highs   = raw.map(k => parseFloat(k[2]));
-        const lows    = raw.map(k => parseFloat(k[3]));
-        const price   = closes[closes.length - 1];
-        const sc = calcScore(closes, volumes, highs, lows);
-        setScores({ price, ...sc });
-        setMarketData((prev: any) => ({ ...prev, [sym]: { price, scores: sc } }));
+  // Check locking
+  useEffect(() => {
+    if (PRO_SYMBOLS.includes(selectedSym)) {
+      if (!license) setIsLocked(true);
+      else {
+        // Simple client-side check, backend will gate anyway
+        setIsLocked(false);
+      }
+    } else {
+      setIsLocked(false);
+    }
+  }, [selectedSym, license]);
+
+  // Fetch Macro
+  useEffect(() => {
+    fetch(`${API_BASE}/api/macro`).then(r => r.json()).then(setMacro).catch(console.error);
+    const intervalId = setInterval(() => {
+      fetch(`${API_BASE}/api/macro`).then(r => r.json()).then(setMacro).catch(console.error);
+    }, 60000);
+    return () => clearInterval(intervalId);
+  }, []);
+
+  // Chart Sync
+  useEffect(() => {
+    if (!chartContainerRef.current) return;
+
+    if (chartRef.current) {
+        chartRef.current.remove();
+    }
+
+    const chart = createChart(chartContainerRef.current, {
+      layout: { 
+        background: { type: ColorType.Solid, color: 'transparent' },
+        textColor: '#888',
+      },
+      grid: {
+        vertLines: { color: '#1a1a1a' },
+        horzLines: { color: '#1a1a1a' },
+      },
+      width: chartContainerRef.current.clientWidth,
+      height: chartContainerRef.current.clientHeight,
+    });
+
+    const series = chart.addCandlestickSeries({
+      upColor: '#00ffcc',
+      downColor: '#ff4d4d',
+      borderVisible: false,
+      wickUpColor: '#00ffcc',
+      wickDownColor: '#ff4d4d',
+    });
+
+    chartRef.current = chart;
+    seriesRef.current = series;
+
+    // Fetch History
+    const fetchPath = `${API_BASE}/api/history/${selectedSym}USDT?interval=${interval}&key=${license}&fingerprint=${fingerprint}`;
+    fetch(fetchPath)
+      .then(r => r.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          series.setData(data as CandlestickData[]);
+          chart.timeScale().fitContent();
+        }
       })
       .catch(console.error);
-  }, [selectedCrypto, selectedInterval]);
 
-  // Live WebSocket from Binance (all symbols, all intervals)
-  useEffect(() => {
-    if (wsRef.current) wsRef.current.close();
-
-    const streams = SYMBOLS.flatMap(s =>
-      INTERVALS.map(i => `${s.toLowerCase()}@kline_${i}`)
-    ).join('/');
-
-    const ws = new WebSocket(`${BINANCE_WS}/${streams}`);
-    wsRef.current = ws;
-
-    // Keep a rolling candle buffer per symbol+interval for scoring
-    const buffers: Record<string, { closes: number[], volumes: number[], highs: number[], lows: number[] }> = {};
-
-    ws.onmessage = (event) => {
-      const msg  = JSON.parse(event.data);
-      const k    = msg.k;
-      const sym  = msg.s;        // e.g. "BTCUSDT"
-      const inter = k.i;         // e.g. "1m"
-      const key   = `${sym}_${inter}`;
-
-      if (!buffers[key]) {
-        buffers[key] = { closes: [], volumes: [], highs: [], lows: [] };
-      }
-      const buf = buffers[key];
-      buf.closes.push(parseFloat(k.c));
-      buf.volumes.push(parseFloat(k.v));
-      buf.highs.push(parseFloat(k.h));
-      buf.lows.push(parseFloat(k.l));
-      if (buf.closes.length > 200) { buf.closes.shift(); buf.volumes.shift(); buf.highs.shift(); buf.lows.shift(); }
-
-      const price = parseFloat(k.c);
-
-      // Only calculate scores when we have enough data
-      if (inter === selectedInterval) {
-        setMarketData((prev: any) => {
-          let sc = prev[sym]?.scores;
-          if (buf.closes.length >= 50) {
-            sc = calcScore(buf.closes, buf.volumes, buf.highs, buf.lows);
-          }
-          return { ...prev, [sym]: { price, scores: sc } };
-        });
-      }
-
-      if (sym === selectedCrypto && inter === selectedInterval) {
-        const candle: CandlestickData = {
-          time: Math.floor(parseInt(k.t) / 1000) as any,
-          open: parseFloat(k.o),
-          high: parseFloat(k.h),
-          low: parseFloat(k.l),
-          close: parseFloat(k.c),
-        };
-        setLiveCandle(candle);
-
-        if (buf.closes.length >= 50) {
-          const sc = calcScore(buf.closes, buf.volumes, buf.highs, buf.lows);
-          setScores({ price, ...sc });
-        }
-      }
+    const handleResize = () => {
+      chart.applyOptions({ width: chartContainerRef.current?.clientWidth });
     };
 
-    ws.onerror = (e) => console.error('Binance WS error', e);
-    ws.onclose = () => console.log('Binance WS closed');
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      chart.remove();
+    };
+  }, [selectedSym, interval, license, fingerprint]);
 
+  // WebSocket for Live Updates
+  useEffect(() => {
+    const ws = new WebSocket(`${WS_BASE}/ws/stream`);
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      const { symbol, interval: msgInter, price, scores, time, open, high, low, close } = data;
+      
+      const s = symbol.replace("USDT", "");
+      setMarketData(prev => ({
+        ...prev,
+        [s]: {
+          ...prev[s],
+          [msgInter]: { price, scores, time }
+        }
+      }));
+
+      // If matches current view, update chart
+      if (s === selectedSym && msgInter === interval && seriesRef.current) {
+        seriesRef.current.update({
+          time: time as any,
+          open, high, low, close
+        });
+      }
+    };
     return () => ws.close();
-  }, [selectedCrypto, selectedInterval]);
+  }, [selectedSym, interval]);
 
-  const currentAsset = marketData[selectedCrypto];
+  const currentState = marketData[selectedSym]?.[interval];
 
   return (
-    <div className="dashboard-container">
-      {/* Header */}
-      <header className="header">
-        <div className="logo flex items-center gap-2">
-          <Activity color="#2962FF" />
-          <span>CryptoSaaS <span className="pro-badge">PRO</span></span>
+    <div className="min-h-screen flex flex-col bg-bg text-foreground">
+      {/* --- Top Navbar --- */}
+      <nav className="h-16 flex items-center justify-between px-6 border-b border-border glass sticky top-0 z-50">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-brand-dim border border-brand rounded-lg flex items-center justify-center">
+            <Zap className="text-brand w-6 h-6" />
+          </div>
+          <span className="font-bold text-xl tracking-tight uppercase">CriptoBot <span className="text-brand">Pro</span></span>
         </div>
-        <div className="flex gap-4 items-center">
-          <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Live · Binance Data</span>
-        </div>
-      </header>
 
-      {/* Sidebar Left */}
-      <aside className="sidebar-left">
-        <h3 style={{ padding: '0 20px', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '10px' }}>MARKETS</h3>
-        {SYMBOLS.map(sym => {
-          const d     = marketData[sym];
-          const price = d ? d.price.toFixed(2) : '···';
-          const score = d?.scores?.score ?? 0;
-          return (
-            <div
-              key={sym}
-              className={`nav-item ${selectedCrypto === sym ? 'active' : ''}`}
-              onClick={() => setSelectedCrypto(sym)}
-            >
-              <div>
-                <div style={{ fontWeight: 'bold' }}>{sym.replace('USDT', '')}</div>
-                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>${price}</div>
-              </div>
-              <div style={{ color: score > 65 ? 'var(--accent-up)' : 'var(--text-muted)' }}>
-                ★ {score}
-              </div>
+        {/* Desktop Macro Bar */}
+        <div className="hidden md:flex items-center gap-6 overflow-x-auto px-4 max-w-xl">
+          {macro.map(m => (
+            <div key={m.symbol} className="flex items-center gap-2 whitespace-nowrap">
+              <span className="text-xs text-gray-500 font-medium uppercase">{m.symbol}</span>
+              <span className={`text-sm font-bold ${m.change >= 0 ? 'text-brand' : 'text-red-500'}`}>
+                {m.change >= 0 ? '+' : ''}{m.change.toFixed(2)}%
+              </span>
             </div>
-          );
-        })}
-      </aside>
-
-      {/* Chart */}
-      <main className="main-chart" style={{ display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '10px', display: 'flex', gap: '10px', borderBottom: '1px solid var(--border)' }}>
-          {INTERVALS.map(inter => (
-            <button
-              key={inter}
-              onClick={() => setSelectedInterval(inter)}
-              style={{
-                background: selectedInterval === inter ? '#2962FF' : 'transparent',
-                color: selectedInterval === inter ? '#fff' : 'var(--text-muted)',
-                border: '1px solid #2B3139',
-                padding: '5px 12px',
-                borderRadius: '4px',
-                cursor: 'pointer',
-              }}
-            >
-              {inter}
-            </button>
           ))}
         </div>
-        <div style={{ flex: 1, position: 'relative' }}>
-          {historicalData.length > 0 ? (
-            <ChartComponent
-              key={`${selectedCrypto}-${selectedInterval}`}
-              data={historicalData}
-              liveCandle={liveCandle}
-              support={scores?.support}
-              resistance={scores?.resistance}
-            />
-          ) : (
-            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: 'var(--text-muted)' }}>
-              Cargando datos de Binance...
+
+        <button className="md:hidden" onClick={() => setMenuOpen(!menuOpen)}>
+          {menuOpen ? <X /> : <Menu />}
+        </button>
+      </nav>
+
+      {/* --- Main Layout --- */}
+      <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+        
+        {/* --- Sidebar (Asset Selector) --- */}
+        <aside className={`fixed inset-0 z-40 bg-bg transition-transform md:relative md:translate-x-0 ${menuOpen ? 'translate-x-0' : '-translate-x-full'} md:w-72 border-r border-border p-4 flex flex-col gap-4`}>
+          <div className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 px-2">Activos Disponibles</div>
+          {SYMBOLS.map(s => (
+            <button 
+              key={s}
+              onClick={() => { setSelectedSym(s); setMenuOpen(false); }}
+              className={`flex items-center justify-between p-4 rounded-xl transition-all ${selectedSym === s ? 'bg-brand/10 border border-brand text-brand' : 'hover:bg-surface border border-transparent text-gray-400'}`}
+            >
+              <div className="flex items-center gap-3">
+                <BarChart3 className="w-5 h-5" />
+                <span className="font-bold">{s}</span>
+              </div>
+              {PRO_SYMBOLS.includes(s) && !license && <Lock className="w-4 h-4 opacity-50" />}
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          ))}
+
+          <div className="mt-auto pt-6 border-t border-border px-2">
+            <div className="flex items-center gap-2 text-xs text-gray-500 mb-2">
+              <ShieldCheck className="w-4 h-4" /> Licencia Dispositivo
             </div>
-          )}
-        </div>
-      </main>
-
-      {/* Sidebar Right */}
-      <aside className="sidebar-right">
-        {scores && currentAsset ? (
-          <>
-            <div className="panel-card">
-              <h3>Asset</h3>
-              <div style={{ fontSize: '1.4rem', fontWeight: 'bold' }}>{selectedCrypto.replace('USDT', '')} <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>({selectedInterval})</span></div>
-              <div style={{ fontSize: '1.8rem', fontFamily: 'monospace' }}>${currentAsset.price.toFixed(2)}</div>
-            </div>
-
-            <div className="panel-card">
-              <h3>AI Engine Score</h3>
-              <div className="score-display">{scores.score} <span style={{ fontSize: '1rem', color: 'var(--text-muted)' }}>/ 100</span></div>
-            </div>
-
-            <div className="panel-card">
-              <h3>Prediction Probabilities</h3>
-
-              <div className="prob-row">
-                <span><TrendingUp size={14} style={{ display: 'inline', marginRight: '5px' }} />Up</span>
-                <span>{(scores.probUp * 100).toFixed(0)}%</span>
+            {license ? (
+              <div className="text-xs font-mono bg-surface p-2 rounded border border-border text-brand truncate max-w-full">
+                {license}
               </div>
-              <div className="prob-bar-container up">
-                <div className="prob-bar" style={{ width: `${scores.probUp * 100}%` }} />
-              </div>
-
-              <div className="prob-row">
-                <span><TrendingDown size={14} style={{ display: 'inline', marginRight: '5px' }} />Down</span>
-                <span>{(scores.probDown * 100).toFixed(0)}%</span>
-              </div>
-              <div className="prob-bar-container down">
-                <div className="prob-bar" style={{ width: `${scores.probDown * 100}%` }} />
-              </div>
-
-              <div className="prob-row">
-                <span><Target size={14} style={{ display: 'inline', marginRight: '5px' }} />Breakout</span>
-                <span>{(scores.probBreakout * 100).toFixed(0)}%</span>
-              </div>
-              <div className="prob-bar-container breakout">
-                <div className="prob-bar" style={{ width: `${scores.probBreakout * 100}%` }} />
-              </div>
-            </div>
-
-            <div className="panel-card">
-              <h3>Key Levels (Auto)</h3>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
-                <span style={{ color: 'var(--accent-down)' }}>Resistance</span>
-                <strong>${scores.resistance.toFixed(2)}</strong>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--accent-up)' }}>Support</span>
-                <strong>${scores.support.toFixed(2)}</strong>
-              </div>
-            </div>
-
-            <div className="panel-card" style={{ border: '1px solid var(--border)', background: 'var(--bg-panel)' }}>
-              <div style={{ marginBottom: '10px' }}>
-                <h4 style={{ margin: 0, fontSize: '0.9rem' }}>Telegram Alerts</h4>
-                <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-muted)' }}>Activas vía backend</p>
-              </div>
-              <button className="button telegram-btn" style={{ width: '100%' }}>
-                <Bell size={16} /> @G5realmoney
+            ) : (
+              <button 
+                onClick={() => { /* Open modal or focus input */ }}
+                className="text-xs text-brand hover:underline font-bold"
+              >
+                Activar Plan Pro
               </button>
-            </div>
-          </>
-        ) : (
-          <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)' }}>
-            Conectando a Binance...
+            )}
           </div>
-        )}
-      </aside>
+        </aside>
+
+        {/* --- Content Area --- */}
+        <main className="flex-1 flex flex-col overflow-y-auto p-4 md:p-6 gap-6">
+          
+          {/* Header & Intervals */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-surface p-6 rounded-2xl border border-border relative overflow-hidden">
+             {/* Glow Background */}
+            <div className="absolute top-0 right-0 w-32 h-32 bg-brand/5 blur-3xl -translate-y-1/2 translate-x-1/2"></div>
+            
+            <div>
+                <h1 className="text-3xl font-black mb-1 flex items-center gap-3">
+                    {selectedSym}/USDT
+                    {currentState?.price && <span className="text-xl font-medium text-brand">${currentState.price.toLocaleString()}</span>}
+                </h1>
+                <p className="text-gray-500 text-sm">Actualizado en tiempo real • {interval} timeframe</p>
+            </div>
+
+            <div className="flex items-center bg-bg p-1 rounded-xl border border-border">
+                {["10m", "1h", "1d"].map(i => (
+                    <button 
+                        key={i}
+                        onClick={() => setInterval(i)}
+                        className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${interval === i ? 'bg-surface text-brand border border-border shadow-sm' : 'text-gray-500 hover:text-white'}`}
+                    >
+                        {i}
+                    </button>
+                ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            
+            {/* Chart Column */}
+            <div className="xl:col-span-2 flex flex-col gap-6">
+                <div className="card h-[450px] md:h-[550px] relative">
+                    <div ref={chartContainerRef} className="w-full h-full" />
+                    
+                    {isLocked && (
+                        <div className="absolute inset-0 z-10 glass rounded-2xl flex flex-col items-center justify-center text-center p-8">
+                            <div className="w-20 h-20 bg-brand/20 rounded-full flex items-center justify-center mb-6">
+                                <Lock className="text-brand w-10 h-10" />
+                            </div>
+                            <h2 className="text-2xl font-bold mb-2">Sección Premium</h2>
+                            <p className="text-gray-400 mb-8 max-w-xs">Desbloquea señales para {selectedSym} y el mejor algoritmo de predicción por solo 10 USD.</p>
+                            
+                            <div className="flex flex-col gap-3 w-full max-w-sm">
+                                <button className="w-full py-4 bg-brand text-bg font-black rounded-xl hover:scale-[1.02] transition-transform flex items-center justify-center gap-2">
+                                    <CreditCard className="w-5 h-5" /> SOLICITAR CLAVE (10 USD)
+                                </button>
+                                <div className="text-xs text-gray-500 flex items-center justify-center gap-2">
+                                    <ShieldCheck className="w-4 h-4" /> Un solo pago de por vida
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                {/* Macro Mobile View */}
+                <div className="md:hidden flex items-center gap-4 overflow-x-auto p-4 card no-scrollbar">
+                    {macro.map(m => (
+                        <div key={m.symbol} className="bg-bg border border-border px-3 py-2 rounded-lg flex items-center gap-2">
+                             <span className="text-[10px] text-gray-500 font-bold uppercase">{m.symbol}</span>
+                             <span className={`text-xs font-bold ${m.change >= 0 ? 'text-brand' : 'text-red-500'}`}>
+                                {m.change.toFixed(2)}%
+                             </span>
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            {/* Analysis Column */}
+            <div className="flex flex-col gap-6">
+                {/* Prediction Engine */}
+                <div className="card p-6 flex flex-col gap-6">
+                    <div className="flex items-center justify-between">
+                        <span className="text-xs font-black text-brand uppercase tracking-widest">Prediction Engine</span>
+                        <div className="flex items-center gap-2 text-[10px] bg-brand-dim text-brand px-2 py-1 rounded-full animate-pulse">
+                            <Zap className="w-3 h-3" /> IA PRO ACTIVE
+                        </div>
+                    </div>
+
+                    <div className="flex flex-col items-center text-center py-4">
+                        <div className="relative w-40 h-40 flex items-center justify-center">
+                            {/* Circular Meter Simulation */}
+                            <svg className="w-full h-full -rotate-90">
+                                <circle cx="80" cy="80" r="70" stroke="#1a1a1a" strokeWidth="8" fill="none" />
+                                <circle 
+                                    cx="80" cy="80" r="70" stroke="#00ffcc" strokeWidth="8" fill="none" 
+                                    strokeDasharray="440" strokeDashoffset={440 - (440 * (currentState?.scores?.score || 50)) / 100}
+                                    className="transition-all duration-1000"
+                                />
+                            </svg>
+                            <div className="absolute flex flex-col">
+                                <span className="text-5xl font-black">{currentState?.scores?.score || "--"}</span>
+                                <span className="text-[10px] text-gray-500 uppercase font-black">Score IA</span>
+                            </div>
+                        </div>
+                        
+                        <div className="mt-6 flex gap-8">
+                            <div className="flex flex-col">
+                                <span className="text-xs text-gray-500 uppercase font-bold mb-1">PROB UP</span>
+                                <span className="text-xl font-bold text-brand">{Math.round((currentState?.scores?.prob_up || 0.5) * 100)}%</span>
+                            </div>
+                            <div className="flex flex-col">
+                                <span className="text-xs text-gray-500 uppercase font-bold mb-1">PROB DOWN</span>
+                                <span className="text-xl font-bold text-red-500">{Math.round((currentState?.scores?.prob_down || 0.5) * 100)}%</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="space-y-4">
+                        <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest">Sentiment & Logic</h4>
+                        <div className="flex flex-col gap-3">
+                            {currentState?.scores?.reasons?.map((r: string, idx: number) => (
+                                <div key={idx} className="flex items-start gap-3 bg-bg/50 p-3 rounded-xl border border-border/50">
+                                    <div className={`mt-1.5 w-1.5 h-1.5 rounded-full ${r.includes("Bullish") || r.includes("Up") || r.includes("Oversold") ? 'bg-brand' : 'bg-red-500'}`} />
+                                    <span className="text-sm font-medium">{r}</span>
+                                </div>
+                            )) || <div className="text-sm text-gray-500 italic">No analysis data available for this timeframe yet.</div>}
+                        </div>
+                    </div>
+                </div>
+
+                {/* Subscription Card (Only if not hidden by script logic) */}
+                {!license && (
+                    <div className="card p-6 bg-gradient-to-br from-brand/10 to-transparent">
+                        <h4 className="text-lg font-bold mb-4 flex items-center gap-2">
+                             <ShieldCheck className="text-brand w-5 h-5" /> Acceso Ilimitado
+                        </h4>
+                        <div className="space-y-3 mb-6">
+                            {[
+                                "Señales Pro en Telegram (Criptomiau)",
+                                "Predicciones ETH, SOL, BNB",
+                                "Algoritmo de Macro Correlación",
+                                "Sin renovaciones, pago único"
+                            ].map((t, idx) => (
+                                <div key={idx} className="flex items-center gap-2 text-sm text-gray-300">
+                                    <ChevronRight className="w-4 h-4 text-brand" /> {t}
+                                </div>
+                            ))}
+                        </div>
+                        <input 
+                            type="text" 
+                            placeholder="Ingresar clave recibida..."
+                            value={license}
+                            onChange={(e) => {
+                                setLicense(e.target.value);
+                                localStorage.setItem("cb_key", e.target.value);
+                            }}
+                            className="w-full bg-bg border border-border p-3 rounded-xl mb-4 text-sm focus:border-brand outline-none transition-all"
+                        />
+                        <p className="text-[10px] text-gray-500 text-center">
+                            Envía tu comprobante de 10 USDT (BSC) a<br/>
+                            <span className="text-brand font-bold">dan.tagle2023@gmail.com</span>
+                        </p>
+                    </div>
+                )}
+            </div>
+          </div>
+
+          {/* USDT Payment Info (Extra visibility) */}
+          <div className="card p-8 bg-surface border-brand/20 flex flex-col md:flex-row items-center gap-8">
+            <div className="w-24 h-24 bg-white p-2 rounded-xl border border-border shrink-0">
+                {/* Simplified QR Placeholder */}
+                <div className="w-full h-full bg-bg flex items-center justify-center text-xs text-gray-500 text-center font-bold uppercase">USDT<br/>BSC</div>
+            </div>
+            <div className="flex-1 text-center md:text-left">
+                <h3 className="text-xl font-bold mb-2">Desbloquea el Poder Total de Scalping</h3>
+                <p className="text-gray-400 text-sm mb-4">Envía 10 USD en USDT vía red BSC BEP20 a la siguiente dirección y recibe tu clave en 24h.</p>
+                <div className="flex items-center gap-3 bg-bg border border-border p-4 rounded-xl">
+                    <code className="text-xs md:text-sm font-mono text-brand break-all">0x1362e63dba3bbc05076a9e8d0f1c5b5e52208427</code>
+                    <button 
+                        onClick={() => navigator.clipboard.writeText("0x1362e63dba3bbc05076a9e8d0f1c5b5e52208427")}
+                        className="p-2 hover:bg-surface rounded-lg transition-all"
+                    >
+                        <smartphone className="w-4 h-4" />
+                    </button>
+                </div>
+            </div>
+            <div className="flex flex-col gap-2 shrink-0">
+                <a href="mailto:dan.tagle2023@gmail.com" className="flex items-center gap-2 text-sm hover:text-brand transition-colors">
+                    <Mail className="w-4 h-4" /> dan.tagle2023@gmail.com
+                </a>
+                <span className="text-xs text-gray-600 font-bold uppercase">Software Pro by Dantagle.cl</span>
+            </div>
+          </div>
+
+          <footer className="py-8 flex flex-col items-center gap-2 border-t border-border mt-12 opacity-50">
+                <div className="text-sm font-bold uppercase tracking-widest flex items-center gap-2">
+                    CriptoBot <span className="text-brand">Pro</span>
+                </div>
+                <p className="text-xs">Hecho con pasión por <a href="https://dantagle.cl" className="text-brand hover:underline">dantagle.cl</a></p>
+                <div className="flex gap-4 mt-2">
+                    <Smartphone className="w-4 h-4" />
+                    <Globe className="w-4 h-4" />
+                    <BarChart3 className="w-4 h-4" />
+                </div>
+          </footer>
+
+        </main>
+      </div>
     </div>
   );
 }

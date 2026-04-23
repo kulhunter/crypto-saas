@@ -13,3 +13,5 @@ frontend/out/
 backend/.env
 frontend/.env
 *.local
+# Databases
+backend/*.db
