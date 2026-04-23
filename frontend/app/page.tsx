@@ -1,13 +1,13 @@
 "use client";
 import React, { useEffect, useState, useRef, useCallback } from "react";
-import { createChart, ColorType, ISeriesApi, CandlestickSeries, Time, LineSeries } from "lightweight-charts";
+import { createChart, ColorType, ISeriesApi, CandlestickSeries, Time } from "lightweight-charts";
 import {
   Lock, Zap, BarChart3, Mail, Copy, ChevronRight, Menu, X,
   Activity, Smartphone, Target, AlertTriangle, ArrowRightCircle, ShieldCheck
 } from "lucide-react";
 import ToastProvider, { toast } from "./components/Toast";
 import LicenseModal from "./components/LicenseModal";
-import { calculateRealScore, calculateHistoricalScores, Candle, ScoreData } from "./utils/analysis";
+import { calculateRealScore, Candle, ScoreData, TradingSignal } from "./utils/analysis";
 
 const SYMBOLS = ["BTC", "ETH", "SOL", "BNB"];
 const PRO_SYMBOLS = ["ETH", "SOL", "BNB"];
@@ -37,10 +37,38 @@ export default function Dashboard() {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<any>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
-  const scoreSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  
+  const tp1LineRef = useRef<any>(null);
+  const tp2LineRef = useRef<any>(null);
+  const slLineRef = useRef<any>(null);
 
   const macroScoreRef = useRef(0);
   const macroReasonRef = useRef("");
+
+  const updatePriceLines = useCallback((series: ISeriesApi<"Candlestick">, signal: TradingSignal | null) => {
+    if (!signal) {
+        if (tp1LineRef.current) { series.removePriceLine(tp1LineRef.current); tp1LineRef.current = null; }
+        if (tp2LineRef.current) { series.removePriceLine(tp2LineRef.current); tp2LineRef.current = null; }
+        if (slLineRef.current) { series.removePriceLine(slLineRef.current); slLineRef.current = null; }
+        return;
+    }
+    
+    const isLong = signal.direction.includes('LONG');
+    
+    // LineStyle: 0=Solid, 1=Dotted, 2=Dashed
+    const tp1Opts: any = { price: signal.takeProfit1, color: isLong ? '#00ffcc' : '#ff4466', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'TP1' };
+    const tp2Opts: any = { price: signal.takeProfit2, color: isLong ? '#00ffcc' : '#ff4466', lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: 'TP2' };
+    const slOpts: any = { price: signal.stopLoss, color: isLong ? '#ff4466' : '#00ffcc', lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: 'SL' };
+    
+    if (tp1LineRef.current) tp1LineRef.current.applyOptions(tp1Opts);
+    else tp1LineRef.current = series.createPriceLine(tp1Opts);
+    
+    if (tp2LineRef.current) tp2LineRef.current.applyOptions(tp2Opts);
+    else tp2LineRef.current = series.createPriceLine(tp2Opts);
+    
+    if (slLineRef.current) slLineRef.current.applyOptions(slOpts);
+    else slLineRef.current = series.createPriceLine(slOpts);
+  }, []);
 
   useEffect(() => {
     setLicense(localStorage.getItem("cb_key") || "");
@@ -90,29 +118,13 @@ export default function Dashboard() {
       timeScale: { timeVisible: true, secondsVisible: false }
     });
 
-    // Dual Chart Configuration: Candles top 70%, Score Line bottom 30%
     const series = chart.addSeries(CandlestickSeries, {
       upColor: "#00ffcc", downColor: "#ff4466", borderVisible: false,
       wickUpColor: "#00ffcc", wickDownColor: "#ff4466",
     });
-    
-    chart.priceScale('right').applyOptions({
-      scaleMargins: { top: 0, bottom: 0.25 },
-    });
-
-    const scoreSeries = chart.addSeries(LineSeries, {
-      color: 'rgba(0, 255, 204, 0.5)',
-      lineWidth: 2,
-      priceScaleId: 'score',
-    });
-
-    chart.priceScale('score').applyOptions({
-      scaleMargins: { top: 0.8, bottom: 0 },
-    });
 
     chartRef.current = chart;
     seriesRef.current = series;
-    scoreSeriesRef.current = scoreSeries;
 
     let isMounted = true;
     setLoading(true);
@@ -135,10 +147,7 @@ export default function Dashboard() {
             setCurrentPrice(parsedCandles[parsedCandles.length - 1].close);
             const scores = calculateRealScore(parsedCandles, macroScoreRef.current, macroReasonRef.current);
             setScoreData(scores);
-            
-            const history = calculateHistoricalScores(parsedCandles, macroScoreRef.current);
-            const scoreChartData = history.map(h => ({ time: h.time as Time, value: h.value }));
-            scoreSeries.setData(scoreChartData);
+            updatePriceLines(series, scores.signal);
         }
 
         const chartData = parsedCandles.map(c => ({...c, time: c.time as Time}));
@@ -168,8 +177,11 @@ export default function Dashboard() {
             chartRef.current.remove();
             chartRef.current = null;
         }
+        tp1LineRef.current = null;
+        tp2LineRef.current = null;
+        slLineRef.current = null;
     };
-  }, [selectedSym, timeframe]);
+  }, [selectedSym, timeframe, updatePriceLines]);
 
   useEffect(() => {
     const wsUrl = `wss://stream.binance.com:9443/ws/${selectedSym.toLowerCase()}usdt@kline_${timeframe}`;
@@ -205,8 +217,8 @@ export default function Dashboard() {
           const scores = calculateRealScore(updated, macroScoreRef.current, macroReasonRef.current);
           setScoreData(scores);
           
-          if (scoreSeriesRef.current) {
-              scoreSeriesRef.current.update({ time: newCandle.time as Time, value: scores.score });
+          if (seriesRef.current) {
+              updatePriceLines(seriesRef.current, scores.signal);
           }
           
           return updated;
@@ -218,7 +230,7 @@ export default function Dashboard() {
     };
 
     return () => ws.close();
-  }, [selectedSym, timeframe]);
+  }, [selectedSym, timeframe, updatePriceLines]);
 
   const handleActivateLicense = useCallback((key: string) => {
     setLicense(key);
@@ -302,10 +314,6 @@ export default function Dashboard() {
             {/* === CHART === */}
             <div className="xl:col-span-2 flex flex-col gap-5">
               <div className="card h-[400px] md:h-[550px] relative animate-slide-up delay-200">
-                <div className="absolute top-4 left-4 z-10 flex gap-2">
-                    <span className="text-[10px] bg-bg/80 backdrop-blur-md px-2 py-1 rounded border border-border font-bold">Precio</span>
-                    <span className="text-[10px] bg-bg/80 backdrop-blur-md px-2 py-1 rounded border border-border font-bold text-brand">IA Score Oscillator</span>
-                </div>
                 <div ref={chartContainerRef} className="w-full h-full" />
                 {loading && (
                     <div className="absolute inset-0 flex items-center justify-center bg-bg/50 backdrop-blur-sm z-10 rounded-2xl">
@@ -410,8 +418,8 @@ export default function Dashboard() {
               <div className="card p-5 animate-slide-up delay-400 relative">
                 {isLocked && <div className="absolute inset-0 z-10 glass rounded-2xl" />}
                 <div className="flex justify-between items-center mb-3">
-                    <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.15em]">Lógica Algorítmica</h4>
-                    {scoreData && <div className="text-[10px] font-bold bg-surface px-2 py-1 rounded border border-border">Score: {scoreData.score}</div>}
+                    <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.15em]">Indicadores</h4>
+                    {scoreData && <div className="text-[10px] font-bold text-brand bg-brand/10 px-2 py-1 rounded border border-brand/20">Score IA: {scoreData.score}</div>}
                 </div>
                 
                 <div className="flex flex-col gap-2">
