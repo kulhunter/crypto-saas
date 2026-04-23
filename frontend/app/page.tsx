@@ -138,12 +138,14 @@ export default function Dashboard() {
     projectionSeriesRef.current = projSeries;
 
     // Sync Crosshairs and Scrolling
-    mainChart.timeScale().subscribeVisibleTimeRangeChange(range => {
-        if (range) btChart.timeScale().setVisibleRange(range);
-    });
-    btChart.timeScale().subscribeVisibleTimeRangeChange(range => {
-        if (range) mainChart.timeScale().setVisibleRange(range);
-    });
+    const sync1 = (logicalRange: any) => {
+        if (logicalRange) btChart.timeScale().setVisibleLogicalRange(logicalRange);
+    };
+    const sync2 = (logicalRange: any) => {
+        if (logicalRange) mainChart.timeScale().setVisibleLogicalRange(logicalRange);
+    };
+    mainChart.timeScale().subscribeVisibleLogicalRangeChange(sync1);
+    btChart.timeScale().subscribeVisibleLogicalRangeChange(sync2);
 
     let isMounted = true;
     setLoading(true);
