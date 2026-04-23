@@ -42,6 +42,10 @@ export default function Dashboard() {
   const chartRef = useRef<any>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
 
+  // Refs for WebSocket closure prevention
+  const macroScoreRef = useRef(0);
+  const macroReasonRef = useRef("");
+
   // Load License
   useEffect(() => {
     setLicense(localStorage.getItem("cb_key") || "");
@@ -67,10 +71,14 @@ export default function Dashboard() {
         if (change > 2) { score = 15; reason = "Risk-On (Mercado General Alcista)"; }
         else if (change < -2) { score = -15; reason = "Risk-Off (Mercado General Bajista)"; }
         
+        macroScoreRef.current = score;
+        macroReasonRef.current = reason;
         setMacroScore(score);
         setMacroReason(reason);
       })
       .catch(() => {
+         macroScoreRef.current = 0;
+         macroReasonRef.current = "Macro no disponible";
          setMacroScore(0);
          setMacroReason("Macro no disponible");
       })
@@ -98,6 +106,7 @@ export default function Dashboard() {
     chartRef.current = chart;
     seriesRef.current = series;
 
+    let isMounted = true;
     setLoading(true);
     
     // Direct Binance REST API
@@ -105,6 +114,7 @@ export default function Dashboard() {
     fetch(`https://api.binance.com/api/v3/klines?symbol=${selectedSym}USDT&interval=${timeframe}&limit=${limit}`)
       .then(res => res.json())
       .then(data => {
+        if (!isMounted) return;
         const parsedCandles: Candle[] = data.map((d: any) => ({
           time: Math.floor(d[0] / 1000), // Binance returns MS
           open: parseFloat(d[1]),
@@ -117,7 +127,7 @@ export default function Dashboard() {
         setCandles(parsedCandles);
         if (parsedCandles.length > 0) {
             setCurrentPrice(parsedCandles[parsedCandles.length - 1].close);
-            const scores = calculateRealScore(parsedCandles, macroScore, macroReason);
+            const scores = calculateRealScore(parsedCandles, macroScoreRef.current, macroReasonRef.current);
             setScoreData(scores);
         }
 
@@ -127,16 +137,19 @@ export default function Dashboard() {
         chart.timeScale().fitContent();
       })
       .catch(err => {
+         if (!isMounted) return;
          console.error("Error fetching Binance Klines", err);
          toast("❌ Error conectando a Binance REST API");
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+         if (isMounted) setLoading(false);
+      });
 
     const onResize = () => chart.applyOptions({ width: chartContainerRef.current?.clientWidth });
     window.addEventListener("resize", onResize);
     
-    return () => { window.removeEventListener("resize", onResize); chart.remove(); };
-  }, [selectedSym, timeframe, macroScore, macroReason]);
+    return () => { isMounted = false; window.removeEventListener("resize", onResize); chart.remove(); };
+  }, [selectedSym, timeframe]); // Removed macroScore and macroReason to avoid recreation
 
   // Connect Direct Binance WebSocket
   useEffect(() => {
@@ -173,7 +186,7 @@ export default function Dashboard() {
           }
           
           // Re-calculate scores in real time!
-          const scores = calculateRealScore(updated, macroScore, macroReason);
+          const scores = calculateRealScore(updated, macroScoreRef.current, macroReasonRef.current);
           setScoreData(scores);
           
           return updated;
@@ -185,7 +198,7 @@ export default function Dashboard() {
     };
 
     return () => ws.close();
-  }, [selectedSym, timeframe, macroScore, macroReason]);
+  }, [selectedSym, timeframe]); // Removed macroScore and macroReason to prevent premature WebSocket closing
 
   const handleActivateLicense = useCallback((key: string) => {
     setLicense(key);
@@ -263,7 +276,7 @@ export default function Dashboard() {
                 {selectedSym}/USDT
                 {currentPrice > 0 && <span className="text-lg md:text-xl font-semibold text-brand">${currentPrice.toLocaleString()}</span>}
               </h1>
-              <p className="text-brand text-xs mt-1 font-bold flex items-center gap-2"><div className="w-1.5 h-1.5 rounded-full bg-brand animate-pulse"/> Datos reales en vivo desde Binance API</p>
+              <div className="text-brand text-xs mt-1 font-bold flex items-center gap-2"><div className="w-1.5 h-1.5 rounded-full bg-brand animate-pulse"/> Datos reales en vivo desde Binance API</div>
             </div>
             <div className="flex items-center bg-bg p-1 rounded-xl border border-border">
               {["15m", "1h", "4h", "1d"].map(i => (
