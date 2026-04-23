@@ -1,4 +1,5 @@
 "use client";
+// Version 1.1.0 - Pro Noir Redesign
 
 import React, { useEffect, useState, useRef } from 'react';
 import { createChart, ColorType, ISeriesApi, CandlestickData } from 'lightweight-charts';
