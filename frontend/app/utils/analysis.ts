@@ -150,11 +150,11 @@ export function calculateRealScore(candles: Candle[], macroScore: number = 0, ma
   const resistance = Math.max(...window20.map(c => c.high));
 
   // --- Generate Actionable Signal ---
-  let direction: TradingSignal["direction"] = "NEUTRAL";
-  if (score >= 80) direction = "STRONG LONG";
-  else if (score >= 65) direction = "LONG";
-  else if (score <= 20) direction = "STRONG SHORT";
-  else if (score <= 35) direction = "SHORT";
+  let direction: TradingSignal["direction"] = "LONG";
+  if (score >= 70) direction = "STRONG LONG";
+  else if (score >= 50) direction = "LONG";
+  else if (score >= 30) direction = "SHORT";
+  else direction = "STRONG SHORT";
 
   const entry = lastCandle.close;
   // Calculate ATR for dynamic SL/TP
@@ -184,7 +184,7 @@ export function calculateRealScore(candles: Candle[], macroScore: number = 0, ma
     takeProfit2 = entry - (risk * 3);
   }
 
-  const signal: TradingSignal | null = direction === "NEUTRAL" ? null : {
+  const signal: TradingSignal = {
     direction,
     entry,
     stopLoss: Number(stopLoss.toFixed(2)),
@@ -205,7 +205,7 @@ export function calculateRealScore(candles: Candle[], macroScore: number = 0, ma
 }
 
 /** Vectorized historical calculation for the secondary chart oscillator */
-export function calculateHistoricalScores(candles: Candle[], macroScore: number = 0): HistoricalScore[] {
+export function calculateHistoricalProjections(candles: Candle[], macroScore: number = 0): HistoricalScore[] {
   if (candles.length < 50) return [];
   
   const closes = candles.map(c => c.close);
@@ -237,9 +237,35 @@ export function calculateHistoricalScores(candles: Candle[], macroScore: number 
     if (macroScore !== 0) probUp += (macroScore / 100);
 
     probUp = Math.min(0.95, Math.max(0.05, probUp));
+    const score = probUp * 100;
+    
+    const window20 = candles.slice(i - 19, i + 1);
+    const support = Math.min(...window20.map(c => c.low));
+    const resistance = Math.max(...window20.map(c => c.high));
+
+    const atrWindow = candles.slice(i - 13, i + 1);
+    let trSum = 0;
+    for (let j = 1; j < atrWindow.length; j++) {
+      const prevC = atrWindow[j-1].close;
+      const h = atrWindow[j].high;
+      const l = atrWindow[j].low;
+      trSum += Math.max(h - l, Math.abs(h - prevC), Math.abs(l - prevC));
+    }
+    const entry = candles[i].close;
+    const atr = trSum / 14 || (entry * 0.01);
+
+    let tp1 = 0;
+    if (score >= 50) {
+      let stopLoss = support < entry ? support - (atr * 0.5) : entry - (atr * 1.5);
+      tp1 = entry + ((entry - stopLoss) * 1.5);
+    } else {
+      let stopLoss = resistance > entry ? resistance + (atr * 0.5) : entry + (atr * 1.5);
+      tp1 = entry - ((stopLoss - entry) * 1.5);
+    }
+
     history.push({
       time: candles[i].time,
-      value: Number((probUp * 100).toFixed(1))
+      value: Number(tp1.toFixed(2))
     });
   }
 

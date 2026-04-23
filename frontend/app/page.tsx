@@ -1,13 +1,13 @@
 "use client";
 import React, { useEffect, useState, useRef, useCallback } from "react";
-import { createChart, ColorType, ISeriesApi, CandlestickSeries, Time } from "lightweight-charts";
+import { createChart, ColorType, ISeriesApi, CandlestickSeries, Time, LineSeries, LineWidth, LineStyle } from "lightweight-charts";
 import {
   Lock, Zap, BarChart3, Mail, Copy, ChevronRight, Menu, X,
   Activity, Smartphone, Target, AlertTriangle, ArrowRightCircle, ShieldCheck
 } from "lucide-react";
 import ToastProvider, { toast } from "./components/Toast";
 import LicenseModal from "./components/LicenseModal";
-import { calculateRealScore, Candle, ScoreData, TradingSignal } from "./utils/analysis";
+import { calculateRealScore, calculateHistoricalProjections, Candle, ScoreData, TradingSignal } from "./utils/analysis";
 
 const SYMBOLS = ["BTC", "ETH", "SOL", "BNB"];
 const PRO_SYMBOLS = ["ETH", "SOL", "BNB"];
@@ -34,6 +34,7 @@ export default function Dashboard() {
   const [modalOpen, setModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // Main Chart Refs
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<any>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -41,6 +42,12 @@ export default function Dashboard() {
   const tp1LineRef = useRef<any>(null);
   const tp2LineRef = useRef<any>(null);
   const slLineRef = useRef<any>(null);
+
+  // Backtest Chart Refs
+  const backtestContainerRef = useRef<HTMLDivElement>(null);
+  const backtestChartRef = useRef<any>(null);
+  const backtestSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const projectionSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
 
   const macroScoreRef = useRef(0);
   const macroReasonRef = useRef("");
@@ -55,7 +62,6 @@ export default function Dashboard() {
     
     const isLong = signal.direction.includes('LONG');
     
-    // LineStyle: 0=Solid, 1=Dotted, 2=Dashed
     const tp1Opts: any = { price: signal.takeProfit1, color: isLong ? '#00ffcc' : '#ff4466', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'TP1' };
     const tp2Opts: any = { price: signal.takeProfit2, color: isLong ? '#00ffcc' : '#ff4466', lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: 'TP2' };
     const slOpts: any = { price: signal.stopLoss, color: isLong ? '#ff4466' : '#00ffcc', lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: 'SL' };
@@ -102,29 +108,38 @@ export default function Dashboard() {
       });
   }, []);
 
+  // Initialize both charts and fetch data
   useEffect(() => {
-    if (!chartContainerRef.current) return;
+    if (!chartContainerRef.current || !backtestContainerRef.current) return;
 
     setCandles([]);
     setScoreData(null);
     setCurrentPrice(0);
 
-    const chart = createChart(chartContainerRef.current, {
+    const chartOptions = {
       layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: "#666" },
       grid: { vertLines: { color: "#1a1a22" }, horzLines: { color: "#1a1a22" } },
-      width: chartContainerRef.current.clientWidth,
-      height: chartContainerRef.current.clientHeight,
       crosshair: { mode: 0 },
       timeScale: { timeVisible: true, secondsVisible: false }
-    });
+    };
 
-    const series = chart.addSeries(CandlestickSeries, {
-      upColor: "#00ffcc", downColor: "#ff4466", borderVisible: false,
-      wickUpColor: "#00ffcc", wickDownColor: "#ff4466",
-    });
+    // 1. MAIN CHART
+    const mainChart = createChart(chartContainerRef.current, { ...chartOptions, width: chartContainerRef.current.clientWidth, height: chartContainerRef.current.clientHeight });
+    const mainSeries = mainChart.addSeries(CandlestickSeries, { upColor: "#00ffcc", downColor: "#ff4466", borderVisible: false, wickUpColor: "#00ffcc", wickDownColor: "#ff4466" });
+    chartRef.current = mainChart;
+    seriesRef.current = mainSeries;
 
-    chartRef.current = chart;
-    seriesRef.current = series;
+    // 2. BACKTEST CHART
+    const btChart = createChart(backtestContainerRef.current, { ...chartOptions, width: backtestContainerRef.current.clientWidth, height: backtestContainerRef.current.clientHeight });
+    const btSeries = btChart.addSeries(CandlestickSeries, { upColor: "#00ffcc", downColor: "#ff4466", borderVisible: false, wickUpColor: "#00ffcc", wickDownColor: "#ff4466" });
+    const projSeries = btChart.addSeries(LineSeries, { color: '#00ccff', lineWidth: 2, lineStyle: 0 });
+    backtestChartRef.current = btChart;
+    backtestSeriesRef.current = btSeries;
+    projectionSeriesRef.current = projSeries;
+
+    // Sync Crosshairs and Scrolling
+    mainChart.timeScale().subscribeVisibleTimeRangeChange(range => btChart.timeScale().setVisibleRange(range as any));
+    btChart.timeScale().subscribeVisibleTimeRangeChange(range => mainChart.timeScale().setVisibleRange(range as any));
 
     let isMounted = true;
     setLoading(true);
@@ -147,12 +162,18 @@ export default function Dashboard() {
             setCurrentPrice(parsedCandles[parsedCandles.length - 1].close);
             const scores = calculateRealScore(parsedCandles, macroScoreRef.current, macroReasonRef.current);
             setScoreData(scores);
-            updatePriceLines(series, scores.signal);
+            updatePriceLines(mainSeries, scores.signal);
+
+            const projections = calculateHistoricalProjections(parsedCandles, macroScoreRef.current);
+            projSeries.setData(projections.map(p => ({ time: p.time as Time, value: p.value })));
         }
 
         const chartData = parsedCandles.map(c => ({...c, time: c.time as Time}));
-        series.setData(chartData);
-        chart.timeScale().fitContent();
+        mainSeries.setData(chartData);
+        btSeries.setData(chartData);
+        
+        mainChart.timeScale().fitContent();
+        btChart.timeScale().fitContent();
       })
       .catch(err => {
          if (!isMounted) return;
@@ -164,19 +185,16 @@ export default function Dashboard() {
       });
 
     const onResize = () => {
-        if (chartContainerRef.current && chartRef.current) {
-            chartRef.current.applyOptions({ width: chartContainerRef.current.clientWidth });
-        }
+        if (chartContainerRef.current && chartRef.current) chartRef.current.applyOptions({ width: chartContainerRef.current.clientWidth });
+        if (backtestContainerRef.current && backtestChartRef.current) backtestChartRef.current.applyOptions({ width: backtestContainerRef.current.clientWidth });
     };
     window.addEventListener("resize", onResize);
     
     return () => { 
         isMounted = false; 
         window.removeEventListener("resize", onResize); 
-        if (chartRef.current) {
-            chartRef.current.remove();
-            chartRef.current = null;
-        }
+        if (chartRef.current) { chartRef.current.remove(); chartRef.current = null; }
+        if (backtestChartRef.current) { backtestChartRef.current.remove(); backtestChartRef.current = null; }
         tp1LineRef.current = null;
         tp2LineRef.current = null;
         slLineRef.current = null;
@@ -220,13 +238,16 @@ export default function Dashboard() {
           if (seriesRef.current) {
               updatePriceLines(seriesRef.current, scores.signal);
           }
+
+          if (projectionSeriesRef.current && scores.signal) {
+              projectionSeriesRef.current.update({ time: newCandle.time as Time, value: scores.signal.takeProfit1 });
+          }
           
           return updated;
       });
 
-      if (seriesRef.current) {
-          seriesRef.current.update({ ...newCandle, time: newCandle.time as Time });
-      }
+      if (seriesRef.current) seriesRef.current.update({ ...newCandle, time: newCandle.time as Time });
+      if (backtestSeriesRef.current) backtestSeriesRef.current.update({ ...newCandle, time: newCandle.time as Time });
     };
 
     return () => ws.close();
@@ -311,29 +332,44 @@ export default function Dashboard() {
           </div>
 
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-            {/* === CHART === */}
+            {/* === DUAL CHARTS === */}
             <div className="xl:col-span-2 flex flex-col gap-5">
-              <div className="card h-[400px] md:h-[550px] relative animate-slide-up delay-200">
-                <div ref={chartContainerRef} className="w-full h-full" />
+              
+              {/* CHART 1: Real-Time Market & Current Lines */}
+              <div className="card h-[400px] relative animate-slide-up delay-200 flex flex-col">
+                <div className="flex items-center gap-2 p-4 pb-0 z-10">
+                    <Activity className="w-4 h-4 text-brand" />
+                    <span className="text-xs font-bold uppercase tracking-wider text-gray-300">Mercado en Tiempo Real</span>
+                </div>
+                <div ref={chartContainerRef} className="w-full flex-1" />
                 {loading && (
                     <div className="absolute inset-0 flex items-center justify-center bg-bg/50 backdrop-blur-sm z-10 rounded-2xl">
                         <div className="w-8 h-8 border-2 border-brand/30 border-t-brand rounded-full animate-spin" />
                     </div>
                 )}
-
                 {isLocked && (
                   <div className="absolute inset-0 z-20 glass rounded-2xl flex flex-col items-center justify-center text-center p-6">
                     <div className="w-16 h-16 bg-brand/15 rounded-full flex items-center justify-center mb-5 animate-glow-pulse">
                       <Lock className="text-brand w-8 h-8" />
                     </div>
                     <h2 className="text-xl font-bold mb-2">Contenido Premium</h2>
-                    <p className="text-gray-400 mb-6 max-w-xs text-sm">Desbloquea el análisis IA y señales para {selectedSym} por solo $10 USD (pago único).</p>
+                    <p className="text-gray-400 mb-6 max-w-xs text-sm">Desbloquea el análisis IA y señales para {selectedSym} por solo $10 USD.</p>
                     <button onClick={() => setModalOpen(true)} className="py-3.5 px-8 bg-brand text-bg font-bold rounded-xl hover:brightness-110 transition-all btn-press flex items-center gap-2">
                       <ShieldCheck className="w-4 h-4" /> Obtener Acceso Pro
                     </button>
                   </div>
                 )}
               </div>
+
+              {/* CHART 2: Historical Prediction Backtest */}
+              <div className="card h-[300px] relative animate-slide-up delay-300 flex flex-col border border-brand/10 bg-brand/5">
+                <div className="flex items-center gap-2 p-4 pb-0 z-10">
+                    <Target className="w-4 h-4 text-[#00ccff]" />
+                    <span className="text-xs font-bold uppercase tracking-wider text-gray-300">Backtest: Línea de Proyección (TP) vs Realidad</span>
+                </div>
+                <div ref={backtestContainerRef} className="w-full flex-1" />
+              </div>
+
             </div>
 
             {/* === TRADING SIGNALS PANEL === */}
